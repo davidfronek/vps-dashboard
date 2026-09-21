@@ -1,5 +1,6 @@
 import Image from "next/image";
 import { redirect } from "next/navigation";
+import { connection } from "next/server";
 import Dashboard from "./dashboard";
 import { getSession } from "@/lib/auth";
 
@@ -72,6 +73,7 @@ export function StarterTemplate() {
 }
 
 export default async function Home() {
+  await connection();
   const session = await getSession();
   if (!session) redirect("/login");
   return <Dashboard adminUsername={session.username} />;
