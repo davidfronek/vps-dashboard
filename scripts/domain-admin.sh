@@ -101,8 +101,8 @@ case "$ACTION" in
     chown www-data:www-data "$TEMP_DIR"
     runuser -u www-data -- git clone --branch "$BRANCH" --single-branch -- "$REPOSITORY" "$TEMP_DIR"
     [[ -f $TEMP_DIR/package-lock.json ]] || { echo "package-lock.json is required." >&2; exit 1; }
-    runuser -u www-data -- npm --prefix "$TEMP_DIR" ci
-    runuser -u www-data -- npm --prefix "$TEMP_DIR" run build
+    runuser -u www-data -- env HOME="$TEMP_DIR" npm_config_cache="$TEMP_DIR/.npm" npm --prefix "$TEMP_DIR" ci
+    runuser -u www-data -- env HOME="$TEMP_DIR" npm_config_cache="$TEMP_DIR/.npm" npm --prefix "$TEMP_DIR" run build
     mv "$TEMP_DIR" "$APP_DIR"
     trap - EXIT
 
