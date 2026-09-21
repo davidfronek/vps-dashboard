@@ -78,5 +78,5 @@ export default async function Home() {
   const session = await getSession();
   if (!session) redirect("/login");
   const snapshot = getServerSnapshot();
-  return <Dashboard key={snapshot.collectedAt} adminUsername={session.username} snapshot={snapshot} />;
+  return <Dashboard adminUsername={session.username} snapshot={snapshot} />;
 }
