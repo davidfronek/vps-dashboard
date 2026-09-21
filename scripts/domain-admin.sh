@@ -90,6 +90,7 @@ case "$ACTION" in
     [[ $BRANCH =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || { echo "Invalid branch." >&2; exit 1; }
     [[ $PORT =~ ^[0-9]+$ ]] && ((PORT >= 1024 && PORT <= 65535)) || { echo "Invalid port." >&2; exit 1; }
     valid_flag "$FORCE_HTTPS" && valid_flag "$WWW_REDIRECT" && valid_flag "$AUTOMATIC_SSL" || exit 1
+    ss -ltnH "sport = :$PORT" | grep -q . && { echo "Port $PORT is already in use." >&2; exit 1; }
 
     APP_DIR="/srv/apps/$DOMAIN"
     SERVICE_NAME="vps-app-${DOMAIN//./-}"

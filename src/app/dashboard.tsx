@@ -145,7 +145,7 @@ export default function Dashboard({ adminUsername, snapshot }: { adminUsername: 
   const [githubDeploy, setGithubDeploy] = useState(false);
   const [githubRepository, setGithubRepository] = useState("");
   const [githubBranch, setGithubBranch] = useState("main");
-  const [deploymentPort, setDeploymentPort] = useState(3000);
+  const [deploymentPort, setDeploymentPort] = useState(3001);
   const [autoDeploy, setAutoDeploy] = useState(true);
   const [domainToDelete, setDomainToDelete] = useState<string | null>(null);
   const [domainSettings, setDomainSettings] = useState<DomainSettings | null>(null);
@@ -168,8 +168,8 @@ export default function Dashboard({ adminUsername, snapshot }: { adminUsername: 
     if (!name) return;
     setDomainActionPending(true);
     const result = await (githubDeploy
-      ? deployDomain({ domain: name, repository: githubRepository, branch: githubBranch, port: deploymentPort, automaticSsl: true, forceHttps: true, wwwRedirect: true })
-      : upsertDomain({ domain: name, target: "127.0.0.1:3000", automaticSsl: true, forceHttps: true, wwwRedirect: true }));
+      ? deployDomain({ domain: name, repository: githubRepository, branch: githubBranch, port: deploymentPort, automaticSsl: true, forceHttps: true, wwwRedirect: name.split(".").length === 2 })
+      : upsertDomain({ domain: name, target: "127.0.0.1:3000", automaticSsl: true, forceHttps: true, wwwRedirect: name.split(".").length === 2 }));
     setDomainActionPending(false);
     notify(result.message);
     if (!result.ok) return;
@@ -178,7 +178,7 @@ export default function Dashboard({ adminUsername, snapshot }: { adminUsername: 
     setGithubDeploy(false);
     setGithubRepository("");
     setGithubBranch("main");
-    setDeploymentPort(3000);
+    setDeploymentPort(3001);
     setAutoDeploy(true);
     router.refresh();
   }

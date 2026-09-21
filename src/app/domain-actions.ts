@@ -24,8 +24,14 @@ async function execute(args: string[], successMessage: string): Promise<DomainAc
     revalidatePath("/");
     return { ok: true, message: successMessage };
   } catch (error) {
-    console.error("Domain operation failed", error instanceof Error ? error.message : "Unknown error");
-    return { ok: false, message: "Operace na serveru selhala. Zkontrolujte Nginx, DNS a systémový log." };
+    const detail = error instanceof Error ? error.message : "Unknown error";
+    console.error("Domain operation failed", detail);
+    if (/already in use/i.test(detail)) return { ok: false, message: "Zvolený port už používá jiná aplikace. Zvolte jiný port." };
+    if (/already exists/i.test(detail)) return { ok: false, message: "Pro tuto doménu už existuje rozpracované nasazení. Nejprve ho odstraňte nebo opravte." };
+    if (/certbot|certificate|challenge|dns/i.test(detail)) return { ok: false, message: "Aplikace je připravená, ale vystavení SSL selhalo. Ověřte DNS záznamy domény." };
+    if (/clone|repository/i.test(detail)) return { ok: false, message: "Repozitář se nepodařilo naklonovat. Ověřte adresu a jeho dostupnost." };
+    if (/npm|build/i.test(detail)) return { ok: false, message: "Build aplikace selhal. Podrobnosti jsou v systémovém logu dashboardu." };
+    return { ok: false, message: "Operace na serveru selhala. Podrobnosti jsou v systémovém logu dashboardu." };
   }
 }
 
