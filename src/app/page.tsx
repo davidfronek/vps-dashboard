@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { connection } from "next/server";
 import Dashboard from "./dashboard";
 import { getSession } from "@/lib/auth";
+import { getServerSnapshot } from "@/lib/server-data";
 
 export function StarterTemplate() {
   return (
@@ -76,5 +77,6 @@ export default async function Home() {
   await connection();
   const session = await getSession();
   if (!session) redirect("/login");
-  return <Dashboard adminUsername={session.username} />;
+  const snapshot = getServerSnapshot();
+  return <Dashboard key={snapshot.collectedAt} adminUsername={session.username} snapshot={snapshot} />;
 }

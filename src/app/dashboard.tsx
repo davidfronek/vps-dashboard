@@ -7,18 +7,17 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { FormEvent, useState } from "react";
+import { useRouter } from "next/navigation";
 import DatabaseView from "./database-view";
 import UsersView from "./users-view";
 import { logout } from "./auth-actions";
+import type { ServerSnapshot } from "@/lib/server-data";
 
-type Domain = {
+type Domain = Omit<ServerSnapshot["domains"][number], "ssl" | "status"> & {
   name: string;
   target: string;
-  ssl: "Aktivní" | "Čeká";
-  status: "Online" | "Ověřování" | "Chyba 502";
-  automaticSsl: boolean;
-  forceHttps: boolean;
-  wwwRedirect: boolean;
+  ssl: ServerSnapshot["domains"][number]["ssl"] | "Čeká";
+  status: ServerSnapshot["domains"][number]["status"] | "Ověřování";
   deployment?: {
     repository: string;
     branch: string;
@@ -54,17 +53,8 @@ const navigation: { label: string; icon: LucideIcon; badge?: boolean }[] = [
   { label: "Zabezpečení", icon: ShieldCheck }, { label: "Nastavení", icon: Settings },
 ];
 
-const initialDomains: Domain[] = [
-  { name: "onremote.cz", target: "127.0.0.1:3000", ssl: "Aktivní", status: "Chyba 502", automaticSsl: true, forceHttps: true, wwwRedirect: true },
-  { name: "www.onremote.cz", target: "127.0.0.1:3000", ssl: "Aktivní", status: "Chyba 502", automaticSsl: true, forceHttps: true, wwwRedirect: true },
-];
-
-const metrics = [
-  { label: "Vytížení CPU", value: "0 %", detail: "1 vCPU", icon: Cpu, tone: "blue" },
-  { label: "Operační paměť", value: "376 MB", detail: "z 3,8 GB", icon: MemoryStick, tone: "green" },
-  { label: "Kořenový disk", value: "2,0 GB", detail: "z 30 GB", icon: HardDrive, tone: "amber" },
-  { label: "Doba provozu", value: "3 d 22 h", detail: "bez výpadku", icon: Activity, tone: "violet" },
-];
+const metricIcons = [Cpu, MemoryStick, HardDrive, Activity];
+const serviceIcons = [Server, Globe2, Database, Activity];
 
 function Toggle({ checked, onChange, label }: { checked: boolean; onChange: () => void; label: string }) {
   return <button type="button" className={checked ? "toggle enabled" : "toggle"} role="switch" aria-checked={checked} aria-label={label} onClick={onChange}><span /></button>;
@@ -144,9 +134,10 @@ function SettingsView({ notify }: { notify: (message: string) => void }) {
   </>;
 }
 
-export default function Dashboard({ adminUsername }: { adminUsername: string }) {
+export default function Dashboard({ adminUsername, snapshot }: { adminUsername: string; snapshot: ServerSnapshot }) {
+  const router = useRouter();
   const [activeSection, setActiveSection] = useState("Přehled");
-  const [domains, setDomains] = useState(initialDomains);
+  const [domains, setDomains] = useState<Domain[]>(snapshot.domains);
   const [query, setQuery] = useState("");
   const [modalOpen, setModalOpen] = useState(false);
   const [newDomainName, setNewDomainName] = useState("");
@@ -226,21 +217,18 @@ export default function Dashboard({ adminUsername }: { adminUsername: string }) 
       <main className="workspace">
         <header className="topbar"><button className="icon-button menu-button" onClick={() => setMenuOpen(true)} aria-label="Otevřít navigaci"><Menu size={20} /></button><div className="breadcrumbs"><span>Servery</span><b>/</b><strong>Produkční server</strong></div><div className="top-actions"><button className="icon-button" aria-label="Oznámení" title="Oznámení"><Bell size={19} /><i /></button><button className="terminal-button" onClick={() => notify("SSH: root@46.28.108.112")}><TerminalSquare size={17} /> Terminál</button></div></header>
         <div className="page-content">
-          {activeSection === "Nastavení" ? <SettingsView notify={notify} /> : activeSection === "Databáze" ? <DatabaseView notify={notify} /> : activeSection === "Uživatelé" ? <UsersView notify={notify} /> : <>
-          <section className="page-heading"><div><div className="eyebrow issue"><span className="status-dot issue" /> Webová aplikace vrací chybu 502</div><h1>Produkční server</h1><p>Stav VPS z auditu 21. 9. 2026 v 15:22.</p></div><div className="heading-actions"><button className="secondary-button" onClick={() => notify("Zobrazen je poslední audit z 15:22")}><RefreshCw size={17} /> Obnovit</button><button className="primary-button" onClick={() => setModalOpen(true)}><Plus size={17} /> Přidat doménu</button></div></section>
-          <section className="metrics-grid" aria-label="Využití serveru">{metrics.map(({ label, value, detail, icon: Icon, tone }) => <article className="metric-card" key={label}><span className={`metric-icon ${tone}`}><Icon size={19} /></span><div><span>{label}</span><strong>{value}</strong><small>{detail}</small></div></article>)}</section>
+          {activeSection === "Nastavení" ? <SettingsView notify={notify} /> : activeSection === "Databáze" ? <DatabaseView databases={snapshot.databases} onRefresh={() => router.refresh()} /> : activeSection === "Uživatelé" ? <UsersView users={snapshot.users} onRefresh={() => router.refresh()} /> : <>
+          <section className="page-heading"><div><div className={snapshot.services.every((service) => service.state !== "Nedostupné") ? "eyebrow neutral" : "eyebrow issue"}><span className={snapshot.services.every((service) => service.state !== "Nedostupné") ? "status-dot" : "status-dot issue"} /> {snapshot.services.every((service) => service.state !== "Nedostupné") ? "Všechny sledované služby jsou dostupné" : "Některá služba vyžaduje pozornost"}</div><h1>Produkční server</h1><p>Živý stav z {new Date(snapshot.collectedAt).toLocaleString("cs-CZ")}.</p></div><div className="heading-actions"><button className="secondary-button" onClick={() => router.refresh()}><RefreshCw size={17} /> Obnovit</button><button className="primary-button" onClick={() => setModalOpen(true)}><Plus size={17} /> Přidat doménu</button></div></section>
+          <section className="metrics-grid" aria-label="Využití serveru">{snapshot.metrics.map(({ label, value, detail, tone }, index) => { const Icon = metricIcons[index]; return <article className="metric-card" key={label}><span className={`metric-icon ${tone}`}><Icon size={19} /></span><div><span>{label}</span><strong>{value}</strong><small>{detail}</small></div></article>; })}</section>
 
           <div className="overview-grid">
             <section className="panel performance-panel">
-              <div className="panel-header"><div><h2>Stav služeb</h2><p>Výsledek posledního read-only auditu</p></div><span className="audit-time">15:22</span></div>
+              <div className="panel-header"><div><h2>Stav služeb</h2><p>Aktuální stav systemd</p></div><span className="audit-time">{new Date(snapshot.collectedAt).toLocaleTimeString("cs-CZ", { hour: "2-digit", minute: "2-digit" })}</span></div>
               <div className="service-list">
-                <div><span className="service-icon"><Server size={17} /></span><div><strong>Systémové služby</strong><small>Žádné selhané systemd jednotky</small></div><span className="service-state">V pořádku</span></div>
-                <div><span className="service-icon"><Globe2 size={17} /></span><div><strong>Nginx</strong><small>Porty 80 a 443 · konfigurace platná</small></div><span className="service-state">Online</span></div>
-                <div><span className="service-icon"><Database size={17} /></span><div><strong>PostgreSQL 17.11</strong><small>Naslouchá pouze lokálně na portu 5432</small></div><span className="service-state">Online</span></div>
-                <div className="service-problem"><span className="service-icon"><Activity size={17} /></span><div><strong>Next.js aplikace</strong><small>Na upstream portu 3000 neběží žádný proces</small></div><span className="service-state">Chyba 502</span></div>
+                {snapshot.services.map((service, index) => { const Icon = serviceIcons[index]; return <div className={service.state === "Nedostupné" ? "service-problem" : undefined} key={service.name}><span className="service-icon"><Icon size={17} /></span><div><strong>{service.name}</strong><small>{service.detail}</small></div><span className="service-state">{service.state}</span></div>; })}
               </div>
             </section>
-            <section className="panel server-info"><div className="panel-header"><div><h2>Informace o serveru</h2><p>Konfigurace a síťové údaje</p></div><span className="online-pill">Online</span></div><dl><div><dt>IPv4 adresa</dt><dd>46.28.108.112 <button onClick={() => { navigator.clipboard?.writeText("46.28.108.112"); notify("IP adresa zkopírována"); }} aria-label="Kopírovat IP adresu"><Copy size={14} /></button></dd></div><div><dt>Operační systém</dt><dd>Debian 13 (trixie)</dd></div><div><dt>Virtualizace</dt><dd>KVM · x86-64</dd></div><div><dt>Doba provozu</dt><dd>3 dny, 22 hodin</dd></div><div><dt>Hostname</dt><dd>vm27648</dd></div><div><dt>Poslední záloha</dt><dd>Nezjištěno</dd></div></dl><button className="details-link" onClick={() => notify("Kernel 6.12.107+deb13-amd64")}>Zobrazit konfiguraci <span>→</span></button></section>
+            <section className="panel server-info"><div className="panel-header"><div><h2>Informace o serveru</h2><p>Konfigurace a síťové údaje</p></div><span className="online-pill">Online</span></div><dl><div><dt>IPv4 adresa</dt><dd>{snapshot.server.ipAddress} <button onClick={() => { navigator.clipboard?.writeText(snapshot.server.ipAddress); notify("IP adresa zkopírována"); }} aria-label="Kopírovat IP adresu"><Copy size={14} /></button></dd></div><div><dt>Operační systém</dt><dd>{snapshot.server.operatingSystem}</dd></div><div><dt>Virtualizace</dt><dd>{snapshot.server.virtualization}</dd></div><div><dt>Doba provozu</dt><dd>{snapshot.server.uptime}</dd></div><div><dt>Hostname</dt><dd>{snapshot.server.hostname}</dd></div><div><dt>Kernel</dt><dd>{snapshot.server.kernel}</dd></div></dl></section>
           </div>
 
           <section className="panel management-panel">
