@@ -152,7 +152,7 @@ ensure_wedos_a_record() (
   record_name="${domain%.$zone}"
   [[ $record_name != "$domain" ]] || record_name=""
   wedos_request dns-rows-list "$(node -e 'process.stdout.write(JSON.stringify({domain:process.argv[1]}))' "$zone")" "$workdir/rows.json"
-  IFS='|' read -r action row_id < <(node -e 'const d=require(process.argv[1]).response.data??{};const r=d.row??d;const rows=Array.isArray(r)?r:Object.values(r).filter(x=>x&&typeof x==="object"&&!Array.isArray(x));const n=process.argv[2],ip=process.argv[3];const row=rows.find(x=>String(x.name??"")===n&&String(x.rdtype??x.type??"").toUpperCase()==="A");process.stdout.write(row?(String(row.rdata)===ip?"keep|":"update|"+row.ID):"add|")' "$workdir/rows.json" "$record_name" "$ip")
+  IFS='|' read -r action row_id < <(node -e 'const d=require(process.argv[1]).response.data??{};const r=d.row??d;const rows=Array.isArray(r)?r:Object.values(r).filter(x=>x&&typeof x==="object"&&!Array.isArray(x));const n=process.argv[2],ip=process.argv[3];const row=rows.find(x=>String(x.name??"")===n&&String(x.rdtype??x.type??"").toUpperCase()==="A");process.stdout.write((row?(String(row.rdata)===ip?"keep|":"update|"+row.ID):"add|")+"\n")' "$workdir/rows.json" "$record_name" "$ip")
   if [[ $action == add ]]; then
     wedos_request dns-row-add "$(node -e 'process.stdout.write(JSON.stringify({domain:process.argv[1],name:process.argv[2],ttl:"300",type:"A",rdata:process.argv[3],author_comment:"VPS dashboard"}))' "$zone" "$record_name" "$ip")" "$workdir/change.json"
   elif [[ $action == update ]]; then
