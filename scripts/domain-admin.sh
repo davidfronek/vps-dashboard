@@ -163,6 +163,27 @@ ensure_wedos_a_record() (
   wedos_request dns-domain-commit "$(node -e 'process.stdout.write(JSON.stringify({name:process.argv[1]}))' "$zone")" "$workdir/commit.json"
 )
 
+delete_wedos_a_record() (
+  local domain="$1" ip="46.28.108.112" config="/etc/vps-dashboard/wedos.env"
+  [[ -f $config ]] || return 0
+  set -a
+  source "$config"
+  set +a
+  local workdir zone record_name row_id
+  workdir="$(mktemp -d)"
+  trap 'rm -rf -- "$workdir"' EXIT
+  wedos_request dns-domains-list '{}' "$workdir/domains.json"
+  zone="$(node -e 'const d=require(process.argv[1]).response.data?.domain??[];const list=Array.isArray(d)?d:Object.values(d);const h=process.argv[2];const z=list.map(x=>x.name).filter(x=>h===x||h.endsWith(`.${x}`)).sort((a,b)=>b.length-a.length);process.stdout.write(z[0]??"")' "$workdir/domains.json" "$domain")"
+  [[ -n $zone ]] || { echo "WAPI DNS zone for $domain was not found." >&2; return 1; }
+  record_name="${domain%.$zone}"
+  [[ $record_name != "$domain" ]] || record_name=""
+  wedos_request dns-rows-list "$(node -e 'process.stdout.write(JSON.stringify({domain:process.argv[1]}))' "$zone")" "$workdir/rows.json"
+  row_id="$(node -e 'const d=require(process.argv[1]).response.data??{};const r=d.row??d;const rows=Array.isArray(r)?r:Object.values(r).filter(x=>x&&typeof x==="object"&&!Array.isArray(x));const n=process.argv[2],ip=process.argv[3];const row=rows.find(x=>String(x.name??"")===n&&String(x.rdtype??x.type??"").toUpperCase()==="A"&&String(x.rdata??"")===ip);process.stdout.write(String(row?.ID??""))' "$workdir/rows.json" "$record_name" "$ip")"
+  [[ -n $row_id ]] || return 0
+  wedos_request dns-row-delete "$(node -e 'process.stdout.write(JSON.stringify({domain:process.argv[1],row_id:process.argv[2]}))' "$zone" "$row_id")" "$workdir/delete.json"
+  wedos_request dns-domain-commit "$(node -e 'process.stdout.write(JSON.stringify({name:process.argv[1]}))' "$zone")" "$workdir/commit.json"
+)
+
 write_proxy_config() {
   local DOMAIN="$SUBJECT"
   local target="$1" force_https="$2" www_redirect="$3"
@@ -353,6 +374,8 @@ EOF
     valid_domain "$DOMAIN" || { echo "Invalid domain." >&2; exit 1; }
     [[ $DOMAIN != "onremote.cz" ]] || { echo "The management domain cannot be deleted." >&2; exit 1; }
     SERVICE_NAME="vps-app-${DOMAIN//./-}"
+    step "Odstraňuji A záznam z WEDOS DNS"
+    delete_wedos_a_record "$DOMAIN"
     step "Zastavuji aplikační službu"
     systemctl disable --now "$SERVICE_NAME" 2>/dev/null || true
     rm -f "/etc/systemd/system/$SERVICE_NAME.service"
