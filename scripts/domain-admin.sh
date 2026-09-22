@@ -4,9 +4,94 @@ set -Eeuo pipefail
 [[ $EUID -eq 0 ]] || { echo "Root privileges are required." >&2; exit 1; }
 
 ACTION="${1:-}"
-DOMAIN="${2:-}"
+SUBJECT="${2:-}"
 NGINX_AVAILABLE="/etc/nginx/sites-available"
 NGINX_ENABLED="/etc/nginx/sites-enabled"
+STATE_DIR="/var/lib/vps-dashboard"
+JOB_DIR="$STATE_DIR/jobs"
+APP_STATE_DIR="$STATE_DIR/apps"
+USER_STATE_DIR="$STATE_DIR/users"
+CLUSTER_STATE_DIR="$STATE_DIR/clusters"
+LOCK_DIR="$STATE_DIR/locks"
+
+job_line() {
+  [[ -n ${JOB_FILE:-} ]] || return 0
+  printf '%s|%s\n' "$1" "$2" >> "$JOB_FILE"
+}
+
+step() {
+  job_line STEP "$1"
+}
+
+job_title() {
+  case "$1" in
+    domain-upsert) echo "Konfigurace domény $2" ;;
+    domain-deploy) echo "Nasazení aplikace $2" ;;
+    domain-renew) echo "Obnova SSL certifikátu $2" ;;
+    domain-delete) echo "Odstranění domény $2" ;;
+    user-create) echo "Vytvoření uživatele $2" ;;
+    user-update) echo "Změna přístupu uživatele $2" ;;
+    user-delete) echo "Odstranění uživatele $2" ;;
+    cluster-create) echo "Vytvoření PostgreSQL clusteru $2/$3" ;;
+    cluster-update) echo "Změna PostgreSQL clusteru $2/$3" ;;
+    cluster-delete) echo "Odstranění PostgreSQL clusteru $2/$3" ;;
+    cluster-start) echo "Spuštění PostgreSQL clusteru $2/$3" ;;
+    cluster-stop) echo "Zastavení PostgreSQL clusteru $2/$3" ;;
+    cluster-restart) echo "Restart PostgreSQL clusteru $2/$3" ;;
+    *) echo "Správa serveru" ;;
+  esac
+}
+
+if [[ $ACTION == "status" ]]; then
+  JOB_ID="$SUBJECT"
+  [[ $JOB_ID =~ ^[a-f0-9]{32}$ ]] || exit 1
+  cat "$JOB_DIR/$JOB_ID"
+  exit
+fi
+
+if [[ $ACTION == "enqueue" ]]; then
+  JOB_ID="$SUBJECT"
+  OPERATION="${3:-}"
+  shift 3
+  [[ $JOB_ID =~ ^[a-f0-9]{32}$ ]] || { echo "Invalid job id." >&2; exit 1; }
+  [[ $OPERATION =~ ^(domain-(upsert|deploy|renew|delete)|user-(create|update|delete)|cluster-(create|update|delete|start|stop|restart))$ ]] || { echo "Unsupported operation." >&2; exit 1; }
+  install -d -o root -g www-data -m 0750 "$JOB_DIR" "$APP_STATE_DIR" "$USER_STATE_DIR" "$CLUSTER_STATE_DIR" "$LOCK_DIR"
+  find "$JOB_DIR" -type f -mtime +7 -delete
+  JOB_FILE="$JOB_DIR/$JOB_ID"
+  install -o root -g www-data -m 0640 /dev/null "$JOB_FILE"
+  job_line STATUS queued
+  job_line TITLE "$(job_title "$OPERATION" "${1:-}" "${2:-}")"
+  systemd-run --quiet --collect --unit="vps-dashboard-job-$JOB_ID" "$0" run-job "$JOB_ID" "$OPERATION" "$@"
+  echo "$JOB_ID"
+  exit
+fi
+
+if [[ $ACTION == "run-job" ]]; then
+  JOB_ID="$SUBJECT"
+  OPERATION="${3:-}"
+  shift 3
+  [[ $JOB_ID =~ ^[a-f0-9]{32}$ ]] || exit 1
+  export JOB_FILE="$JOB_DIR/$JOB_ID"
+  job_line STATUS running
+  trap 'job_line STATUS failed; job_line MESSAGE "Operace byla přerušena."; exit 1' HUP INT TERM
+  RESOURCE_KIND="${OPERATION%%-*}"
+  RESOURCE_ID="${1:-}-${2:-}"
+  exec 9>"$LOCK_DIR/${RESOURCE_KIND}-${RESOURCE_ID//[^a-zA-Z0-9_.-]/_}.lock"
+  if ! flock -n 9; then
+    job_line STATUS failed
+    job_line MESSAGE "Na stejném objektu právě probíhá jiná operace."
+    exit 1
+  fi
+  if "$0" "$OPERATION" "$@"; then
+    job_line STATUS succeeded
+    job_line MESSAGE "Operace byla úspěšně dokončena."
+    exit 0
+  else
+    job_line STATUS failed
+    job_line MESSAGE "Operace na serveru selhala. Zkontrolujte systémový log jobu."
+    exit 1
+  fi
+fi
 
 valid_domain() {
   [[ $1 =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ && $1 == *.* && $1 != *..* ]]
@@ -22,15 +107,31 @@ valid_flag() {
   [[ $1 == "0" || $1 == "1" ]]
 }
 
-valid_domain "$DOMAIN" || { echo "Invalid domain." >&2; exit 1; }
+valid_username() {
+  [[ $1 =~ ^[a-z_][a-z0-9_-]{0,30}$ ]]
+}
+
+protected_user() {
+  [[ $1 =~ ^(root|www-data|postgres|vps-dashboard|deploy|debian|ubuntu)$ ]]
+}
+
+valid_cluster() {
+  [[ $1 =~ ^[0-9]{2}$ && $2 =~ ^[a-z][a-z0-9_-]{0,30}$ && -x /usr/lib/postgresql/$1/bin/postgres ]]
+}
+
+valid_port() {
+  [[ $1 =~ ^[0-9]+$ ]] && (( $1 >= 1024 && $1 <= 65535 ))
+}
 
 write_proxy_config() {
+  local DOMAIN="$SUBJECT"
   local target="$1" force_https="$2" www_redirect="$3"
   valid_target "$target" || { echo "Invalid upstream target." >&2; exit 1; }
   valid_flag "$force_https" || exit 1
   valid_flag "$www_redirect" || exit 1
 
   local config="$NGINX_AVAILABLE/$DOMAIN"
+  step "Připravuji konfiguraci Nginx"
   cat > "$config" <<EOF
 server {
     listen 80;
@@ -64,10 +165,12 @@ EOF
 
   ln -sfn "$config" "$NGINX_ENABLED/$DOMAIN"
   rm -f "$NGINX_ENABLED/www.$DOMAIN"
+  step "Ověřuji a načítám konfiguraci Nginx"
   nginx -t
   systemctl reload nginx
 
   if [[ ${4:-0} == "1" ]]; then
+    step "Vystavuji SSL certifikát"
     local certbot_args=(--nginx --non-interactive --cert-name "$DOMAIN" -d "$DOMAIN")
     [[ $www_redirect == "1" ]] && certbot_args+=(-d "www.$DOMAIN")
     [[ $force_https == "1" ]] && certbot_args+=(--redirect) || certbot_args+=(--no-redirect)
@@ -76,10 +179,16 @@ EOF
 }
 
 case "$ACTION" in
-  upsert)
+  upsert|domain-upsert)
+    DOMAIN="$SUBJECT"
+    valid_domain "$DOMAIN" || { echo "Invalid domain." >&2; exit 1; }
+    step "Ověřuji nastavení domény"
     write_proxy_config "${3:-}" "${4:-}" "${5:-}" "${6:-}"
+    rm -f "$APP_STATE_DIR/$DOMAIN"
     ;;
-  deploy)
+  deploy|domain-deploy)
+    DOMAIN="$SUBJECT"
+    valid_domain "$DOMAIN" || { echo "Invalid domain." >&2; exit 1; }
     REPOSITORY="${3:-}"
     BRANCH="${4:-main}"
     PORT="${5:-}"
@@ -90,23 +199,55 @@ case "$ACTION" in
     [[ $BRANCH =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || { echo "Invalid branch." >&2; exit 1; }
     [[ $PORT =~ ^[0-9]+$ ]] && ((PORT >= 1024 && PORT <= 65535)) || { echo "Invalid port." >&2; exit 1; }
     valid_flag "$FORCE_HTTPS" && valid_flag "$WWW_REDIRECT" && valid_flag "$AUTOMATIC_SSL" || exit 1
-    ss -ltnH "sport = :$PORT" | grep -q . && { echo "Port $PORT is already in use." >&2; exit 1; }
-
     APP_DIR="/srv/apps/$DOMAIN"
     SERVICE_NAME="vps-app-${DOMAIN//./-}"
-    [[ ! -e $APP_DIR ]] || { echo "Application directory already exists." >&2; exit 1; }
     TEMP_DIR="/srv/apps/.${DOMAIN}.deploy.$$"
+    SERVICE_FILE="/etc/systemd/system/$SERVICE_NAME.service"
+    SERVICE_BACKUP="/tmp/$SERVICE_NAME.service.$$"
+    NGINX_BACKUP="/tmp/$SERVICE_NAME.nginx.$$"
     trap 'rm -rf -- "$TEMP_DIR"' EXIT
+    if ss -ltnH "sport = :$PORT" | grep -q . && ! systemctl is-active --quiet "$SERVICE_NAME"; then
+      echo "Port $PORT is already in use." >&2
+      exit 1
+    fi
+
+    step "Klonuji repozitář $BRANCH"
     mkdir -p /srv/apps "$TEMP_DIR"
     chown www-data:www-data "$TEMP_DIR"
     runuser -u www-data -- git clone --branch "$BRANCH" --single-branch -- "$REPOSITORY" "$TEMP_DIR"
     [[ -f $TEMP_DIR/package-lock.json ]] || { echo "package-lock.json is required." >&2; exit 1; }
+    step "Instaluji závislosti"
     runuser -u www-data -- env HOME="$TEMP_DIR" npm_config_cache="$TEMP_DIR/.npm" npm --prefix "$TEMP_DIR" ci
+    step "Sestavuji aplikaci"
     runuser -u www-data -- env HOME="$TEMP_DIR" npm_config_cache="$TEMP_DIR/.npm" npm --prefix "$TEMP_DIR" run build
+    BACKUP_DIR=""
+    [[ ! -f $SERVICE_FILE ]] || cp -a "$SERVICE_FILE" "$SERVICE_BACKUP"
+    [[ ! -f $NGINX_AVAILABLE/$DOMAIN ]] || cp -a "$NGINX_AVAILABLE/$DOMAIN" "$NGINX_BACKUP"
+    if [[ -e $APP_DIR ]]; then
+      BACKUP_DIR="/srv/apps/.${DOMAIN}.previous.$$"
+      systemctl stop "$SERVICE_NAME" 2>/dev/null || true
+      mv "$APP_DIR" "$BACKUP_DIR"
+    fi
     mv "$TEMP_DIR" "$APP_DIR"
     trap - EXIT
+    rollback_deploy() {
+      trap - ERR
+      systemctl stop "$SERVICE_NAME" 2>/dev/null || true
+      rm -rf -- "$APP_DIR"
+      [[ -z $BACKUP_DIR ]] || mv "$BACKUP_DIR" "$APP_DIR"
+      rm -f "$SERVICE_FILE" "$NGINX_AVAILABLE/$DOMAIN" "$NGINX_ENABLED/$DOMAIN"
+      [[ ! -f $SERVICE_BACKUP ]] || cp -a "$SERVICE_BACKUP" "$SERVICE_FILE"
+      [[ ! -f $NGINX_BACKUP ]] || cp -a "$NGINX_BACKUP" "$NGINX_AVAILABLE/$DOMAIN"
+      [[ ! -f $NGINX_AVAILABLE/$DOMAIN ]] || ln -sfn "$NGINX_AVAILABLE/$DOMAIN" "$NGINX_ENABLED/$DOMAIN"
+      systemctl daemon-reload
+      [[ -z $BACKUP_DIR ]] || systemctl start "$SERVICE_NAME" 2>/dev/null || true
+      nginx -t && systemctl reload nginx || true
+      rm -f "$SERVICE_BACKUP" "$NGINX_BACKUP"
+    }
+    trap rollback_deploy ERR
 
-    cat > "/etc/systemd/system/$SERVICE_NAME.service" <<EOF
+    step "Aktivuji systemd službu"
+    cat > "$SERVICE_FILE" <<EOF
 [Unit]
 Description=Web application for $DOMAIN
 After=network.target
@@ -126,25 +267,124 @@ WantedBy=multi-user.target
 EOF
     systemctl daemon-reload
     systemctl enable --now "$SERVICE_NAME"
+    for _ in {1..15}; do
+      curl --fail --silent "http://127.0.0.1:$PORT/" >/dev/null && break
+      sleep 1
+    done
+    curl --fail --silent "http://127.0.0.1:$PORT/" >/dev/null
     write_proxy_config "127.0.0.1:$PORT" "$FORCE_HTTPS" "$WWW_REDIRECT" "$AUTOMATIC_SSL"
+    install -d -o root -g www-data -m 0750 "$APP_STATE_DIR"
+    printf '%s\t%s\t%s\n' "$REPOSITORY" "$BRANCH" "$PORT" > "$APP_STATE_DIR/$DOMAIN"
+    chown root:www-data "$APP_STATE_DIR/$DOMAIN"
+    chmod 0640 "$APP_STATE_DIR/$DOMAIN"
+    [[ -z $BACKUP_DIR ]] || rm -rf -- "$BACKUP_DIR"
+    rm -f "$SERVICE_BACKUP" "$NGINX_BACKUP"
+    trap - ERR
     ;;
-  renew)
+  renew|domain-renew)
+    DOMAIN="$SUBJECT"
+    valid_domain "$DOMAIN" || { echo "Invalid domain." >&2; exit 1; }
+    step "Obnovuji certifikát pomocí Certbotu"
     certbot renew --cert-name "$DOMAIN" --force-renewal --non-interactive
+    step "Ověřuji a načítám konfiguraci Nginx"
     nginx -t
     systemctl reload nginx
     ;;
-  delete)
+  delete|domain-delete)
+    DOMAIN="$SUBJECT"
+    valid_domain "$DOMAIN" || { echo "Invalid domain." >&2; exit 1; }
     [[ $DOMAIN != "onremote.cz" ]] || { echo "The management domain cannot be deleted." >&2; exit 1; }
     SERVICE_NAME="vps-app-${DOMAIN//./-}"
+    step "Zastavuji aplikační službu"
     systemctl disable --now "$SERVICE_NAME" 2>/dev/null || true
     rm -f "/etc/systemd/system/$SERVICE_NAME.service"
     rm -f "$NGINX_ENABLED/$DOMAIN" "$NGINX_ENABLED/www.$DOMAIN"
     rm -f "$NGINX_AVAILABLE/$DOMAIN" "$NGINX_AVAILABLE/www.$DOMAIN"
+    step "Odstraňuji konfiguraci a data"
     rm -rf -- "/srv/apps/$DOMAIN"
+    rm -f "$APP_STATE_DIR/$DOMAIN"
     certbot delete --cert-name "$DOMAIN" --non-interactive 2>/dev/null || true
     systemctl daemon-reload
+    step "Ověřuji a načítám konfiguraci Nginx"
     nginx -t
     systemctl reload nginx
+    ;;
+  user-create)
+    USERNAME="$SUBJECT"
+    SSH_KEY="${3:-}"
+    valid_username "$USERNAME" && ! protected_user "$USERNAME" || { echo "Invalid or protected user." >&2; exit 1; }
+    [[ $SSH_KEY =~ ^ssh-(ed25519|rsa)[[:space:]][A-Za-z0-9+/=]+([[:space:]].*)?$ ]] || { echo "Invalid SSH public key." >&2; exit 1; }
+    ! id "$USERNAME" &>/dev/null || { echo "User already exists." >&2; exit 1; }
+    step "Vytvářím systémový účet"
+    useradd --create-home --shell /bin/bash -- "$USERNAME"
+    trap 'userdel --remove -- "$USERNAME" 2>/dev/null || true' ERR
+    step "Instaluji veřejný SSH klíč"
+    install -d -o "$USERNAME" -g "$USERNAME" -m 0700 "/home/$USERNAME/.ssh"
+    printf '%s\n' "$SSH_KEY" > "/home/$USERNAME/.ssh/authorized_keys"
+    chown "$USERNAME:$USERNAME" "/home/$USERNAME/.ssh/authorized_keys"
+    chmod 0600 "/home/$USERNAME/.ssh/authorized_keys"
+    install -o root -g www-data -m 0640 /dev/null "$USER_STATE_DIR/$USERNAME"
+    trap - ERR
+    ;;
+  user-update)
+    USERNAME="$SUBJECT"
+    ENABLED="${3:-}"
+    valid_username "$USERNAME" && valid_flag "$ENABLED" && ! protected_user "$USERNAME" || { echo "Invalid or protected user." >&2; exit 1; }
+    [[ -f $USER_STATE_DIR/$USERNAME ]] || { echo "User is not managed by the dashboard." >&2; exit 1; }
+    id "$USERNAME" &>/dev/null || { echo "User does not exist." >&2; exit 1; }
+    step "Měním přístupový shell"
+    [[ $ENABLED == "1" ]] && usermod --shell /bin/bash -- "$USERNAME" || usermod --shell /usr/sbin/nologin -- "$USERNAME"
+    [[ $ENABLED == "1" ]] || loginctl terminate-user "$USERNAME" 2>/dev/null || true
+    ;;
+  user-delete)
+    USERNAME="$SUBJECT"
+    valid_username "$USERNAME" && ! protected_user "$USERNAME" || { echo "Invalid or protected user." >&2; exit 1; }
+    [[ -f $USER_STATE_DIR/$USERNAME ]] || { echo "User is not managed by the dashboard." >&2; exit 1; }
+    [[ $(id -u "$USERNAME") -ne 0 ]] || { echo "UID 0 is protected." >&2; exit 1; }
+    step "Ukončuji procesy uživatele"
+    loginctl terminate-user "$USERNAME" 2>/dev/null || true
+    step "Odstraňuji účet a domovský adresář"
+    userdel --remove -- "$USERNAME"
+    rm -f "$USER_STATE_DIR/$USERNAME"
+    ;;
+  cluster-create)
+    VERSION="$SUBJECT"; CLUSTER="${3:-}"; PORT="${4:-}"
+    valid_cluster "$VERSION" "$CLUSTER" && valid_port "$PORT" || { echo "Invalid cluster settings." >&2; exit 1; }
+    [[ $CLUSTER != main ]] || { echo "The main cluster is protected." >&2; exit 1; }
+    step "Vytvářím PostgreSQL cluster"
+    pg_createcluster --port "$PORT" --start "$VERSION" "$CLUSTER"
+    install -o root -g www-data -m 0640 /dev/null "$CLUSTER_STATE_DIR/$VERSION-$CLUSTER"
+    ;;
+  cluster-update)
+    VERSION="$SUBJECT"; CLUSTER="${3:-}"; PORT="${4:-}"
+    valid_cluster "$VERSION" "$CLUSTER" && valid_port "$PORT" || { echo "Invalid cluster settings." >&2; exit 1; }
+    [[ $CLUSTER != main ]] || { echo "The main cluster is protected." >&2; exit 1; }
+    [[ -f $CLUSTER_STATE_DIR/$VERSION-$CLUSTER ]] || { echo "Cluster is not managed by the dashboard." >&2; exit 1; }
+    ! ss -ltnH "sport = :$PORT" | grep -q . || { echo "Port is already in use." >&2; exit 1; }
+    OLD_PORT="$(pg_conftool "$VERSION" "$CLUSTER" show port)"
+    trap 'pg_conftool "$VERSION" "$CLUSTER" set port "$OLD_PORT"; pg_ctlcluster "$VERSION" "$CLUSTER" restart' ERR
+    step "Ukládám nový port clusteru"
+    pg_conftool "$VERSION" "$CLUSTER" set port "$PORT"
+    step "Restartuji PostgreSQL cluster"
+    pg_ctlcluster "$VERSION" "$CLUSTER" restart
+    trap - ERR
+    ;;
+  cluster-start|cluster-stop|cluster-restart)
+    VERSION="$SUBJECT"; CLUSTER="${3:-}"; COMMAND="${ACTION#cluster-}"
+    valid_cluster "$VERSION" "$CLUSTER" || { echo "Invalid cluster." >&2; exit 1; }
+    [[ $CLUSTER != main || $COMMAND == restart ]] || { echo "The main cluster cannot be stopped from the dashboard." >&2; exit 1; }
+    [[ $CLUSTER == main || -f $CLUSTER_STATE_DIR/$VERSION-$CLUSTER ]] || { echo "Cluster is not managed by the dashboard." >&2; exit 1; }
+    step "Provádím akci $COMMAND"
+    pg_ctlcluster "$VERSION" "$CLUSTER" "$COMMAND"
+    ;;
+  cluster-delete)
+    VERSION="$SUBJECT"; CLUSTER="${3:-}"
+    valid_cluster "$VERSION" "$CLUSTER" || { echo "Invalid cluster." >&2; exit 1; }
+    [[ $CLUSTER != main ]] || { echo "The main cluster is protected." >&2; exit 1; }
+    [[ -f $CLUSTER_STATE_DIR/$VERSION-$CLUSTER ]] || { echo "Cluster is not managed by the dashboard." >&2; exit 1; }
+    step "Zastavuji a odstraňuji PostgreSQL cluster"
+    pg_dropcluster --stop "$VERSION" "$CLUSTER"
+    rm -f "$CLUSTER_STATE_DIR/$VERSION-$CLUSTER"
     ;;
   *)
     echo "Unsupported action." >&2

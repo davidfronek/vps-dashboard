@@ -6,12 +6,13 @@ import {
   LogOut, RefreshCw, Search, Server, Settings, ShieldCheck, TerminalSquare, Trash2, Users, X, Zap,
   type LucideIcon,
 } from "lucide-react";
-import { FormEvent, useState } from "react";
+import { FormEvent, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import DatabaseView from "./database-view";
 import UsersView from "./users-view";
+import AdminJobProgress, { runAdminJob } from "./admin-job-progress";
 import { logout } from "./auth-actions";
-import { deleteDomainFromServer, deployDomain, renewDomainCertificate, upsertDomain } from "./domain-actions";
+import type { AdminJob } from "@/lib/admin-job-types";
 import type { ServerSnapshot } from "@/lib/server-data";
 
 type Domain = Omit<ServerSnapshot["domains"][number], "ssl" | "status"> & {
@@ -23,11 +24,10 @@ type Domain = Omit<ServerSnapshot["domains"][number], "ssl" | "status"> & {
     repository: string;
     branch: string;
     port: number;
-    autoDeploy: boolean;
   };
 };
 type DomainGroup = Domain & { key: string; names: string[] };
-type DomainSettings = Pick<DomainGroup, "key" | "name" | "names" | "automaticSsl" | "forceHttps" | "wwwRedirect" | "ssl">;
+type DomainSettings = Pick<DomainGroup, "key" | "name" | "names" | "automaticSsl" | "forceHttps" | "wwwRedirect" | "ssl" | "deployment">;
 
 function getDomainGroupKey(name: string) {
   const normalizedName = name.toLowerCase();
@@ -44,7 +44,13 @@ function groupDomains(domains: Domain[]): DomainGroup[] {
 
   return Array.from(groups, ([key, entries]) => {
     const primary = entries.find((domain) => domain.name.toLowerCase() === key) ?? entries[0];
-    return { ...primary, key, names: entries.map((domain) => domain.name) };
+    return {
+      ...primary,
+      key,
+      names: entries.map((domain) => domain.name),
+      wwwRedirect: entries.some((domain) => domain.name.startsWith("www.") && domain.wwwRedirect),
+      deployment: entries.find((domain) => domain.deployment)?.deployment,
+    };
   });
 }
 
@@ -146,45 +152,68 @@ export default function Dashboard({ adminUsername, snapshot }: { adminUsername: 
   const [githubRepository, setGithubRepository] = useState("");
   const [githubBranch, setGithubBranch] = useState("main");
   const [deploymentPort, setDeploymentPort] = useState(3001);
-  const [autoDeploy, setAutoDeploy] = useState(true);
   const [domainToDelete, setDomainToDelete] = useState<string | null>(null);
   const [domainSettings, setDomainSettings] = useState<DomainSettings | null>(null);
+  const [editGithubDeploy, setEditGithubDeploy] = useState(false);
+  const [editGithubRepository, setEditGithubRepository] = useState("");
+  const [editGithubBranch, setEditGithubBranch] = useState("main");
+  const [editDeploymentPort, setEditDeploymentPort] = useState(3001);
   const [menuOpen, setMenuOpen] = useState(false);
   const [toast, setToast] = useState("");
-  const [pendingOperation, setPendingOperation] = useState<string | null>(null);
+  const [adminJob, setAdminJob] = useState<AdminJob | null>(null);
+  const jobRunning = useRef(false);
+  const pendingOperation = adminJob?.status === "queued" || adminJob?.status === "running";
   const groupedDomains = groupDomains(domains);
   const filteredDomains = groupedDomains.filter((domain) => domain.names.some((name) => name.toLowerCase().includes(query.toLowerCase())));
   const domainForDeletion = groupedDomains.find((domain) => domain.key === domainToDelete);
-  const deploymentCommand = `sudo bash ./scripts/deploy-from-github.sh ${newDomainName || "domena.cz"} ${githubRepository || "https://github.com/uzivatel/repozitar.git"} ${githubBranch || "main"} ${deploymentPort}`;
 
   function notify(message: string) {
     setToast(message);
     window.setTimeout(() => setToast(""), 2600);
   }
 
+  async function executeJob(title: string, request: Parameters<typeof runAdminJob>[0]) {
+    if (jobRunning.current) return false;
+    jobRunning.current = true;
+    setAdminJob({ id: "", status: "queued", title, message: "", steps: [] });
+    try {
+      const result = await runAdminJob(request, setAdminJob);
+      if (result.status === "succeeded") router.refresh();
+      return result.status === "succeeded";
+    } catch (error) {
+      setAdminJob({ id: "", status: "failed", title, message: error instanceof Error ? error.message : "Spojení se serverem selhalo.", steps: [] });
+      return false;
+    } finally {
+      jobRunning.current = false;
+    }
+  }
+
+  function openDomainSettings(domain: DomainSettings) {
+    setDomainSettings(domain);
+    setEditGithubDeploy(Boolean(domain.deployment));
+    setEditGithubRepository(domain.deployment?.repository ?? "");
+    setEditGithubBranch(domain.deployment?.branch ?? "main");
+    setEditDeploymentPort(domain.deployment?.port ?? 3001);
+  }
+
   async function addDomain(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const name = String(new FormData(event.currentTarget).get("domain") ?? "").trim();
     if (!name) return;
-    setPendingOperation(githubDeploy ? `Nasazuji aplikaci ${name} z GitHubu...` : `Zakládám doménu ${name}...`);
-    try {
-      const result = await (githubDeploy
-        ? deployDomain({ domain: name, repository: githubRepository, branch: githubBranch, port: deploymentPort, automaticSsl: true, forceHttps: true, wwwRedirect: name.split(".").length === 2 })
-        : upsertDomain({ domain: name, target: "127.0.0.1:3000", automaticSsl: true, forceHttps: true, wwwRedirect: name.split(".").length === 2 }));
-      notify(result.message);
-      if (!result.ok) return;
+    const wwwRedirect = name.split(".").length === 2 ? "1" : "0";
+    const succeeded = await executeJob(githubDeploy ? `Nasazení aplikace ${name}` : `Konfigurace domény ${name}`, {
+      operation: githubDeploy ? "domain-deploy" : "domain-upsert",
+      arguments: githubDeploy
+        ? [name, githubRepository, githubBranch, String(deploymentPort), "1", wwwRedirect, "1"]
+        : [name, "127.0.0.1:3000", "1", wwwRedirect, "1"],
+    });
+    if (succeeded) {
       setModalOpen(false);
       setNewDomainName("");
       setGithubDeploy(false);
       setGithubRepository("");
       setGithubBranch("main");
       setDeploymentPort(3001);
-      setAutoDeploy(true);
-      router.refresh();
-    } catch {
-      notify("Spojení se serverem selhalo. Zkuste operaci zopakovat.");
-    } finally {
-      setPendingOperation(null);
     }
   }
 
@@ -192,53 +221,29 @@ export default function Dashboard({ adminUsername, snapshot }: { adminUsername: 
     event.preventDefault();
     if (!domainSettings) return;
     const target = String(new FormData(event.currentTarget).get("target") ?? "").trim();
-    if (!target) return;
-    setPendingOperation(`Ukládám nastavení domény ${domainSettings.name}...`);
-    try {
-      const result = await upsertDomain({ domain: domainSettings.name, target, automaticSsl: domainSettings.automaticSsl, forceHttps: domainSettings.forceHttps, wwwRedirect: domainSettings.wwwRedirect });
-      notify(result.message);
-      if (!result.ok) return;
-      setDomainSettings(null);
-      router.refresh();
-    } catch {
-      notify("Spojení se serverem selhalo. Zkuste operaci zopakovat.");
-    } finally {
-      setPendingOperation(null);
-    }
+    const flags = [domainSettings.forceHttps ? "1" : "0", domainSettings.wwwRedirect ? "1" : "0", domainSettings.automaticSsl ? "1" : "0"];
+    const succeeded = await executeJob(editGithubDeploy ? `Nasazení aplikace ${domainSettings.name}` : `Konfigurace domény ${domainSettings.name}`, {
+      operation: editGithubDeploy ? "domain-deploy" : "domain-upsert",
+      arguments: editGithubDeploy
+        ? [domainSettings.name, editGithubRepository, editGithubBranch, String(editDeploymentPort), ...flags]
+        : [domainSettings.name, target, ...flags],
+    });
+    if (succeeded) setDomainSettings(null);
   }
 
   async function renewCertificate() {
     if (!domainSettings) return;
-    setPendingOperation(`Obnovuji SSL certifikát pro ${domainSettings.name}...`);
-    try {
-      const result = await renewDomainCertificate(domainSettings.name);
-      notify(result.message);
-      if (result.ok) router.refresh();
-    } catch {
-      notify("Spojení se serverem selhalo. Zkuste operaci zopakovat.");
-    } finally {
-      setPendingOperation(null);
-    }
+    await executeJob(`Obnova SSL certifikátu ${domainSettings.name}`, { operation: "domain-renew", arguments: [domainSettings.name] });
   }
 
   async function deleteDomain() {
     if (!domainToDelete) return;
-    setPendingOperation(`Odstraňuji doménu ${domainToDelete} a její data...`);
-    try {
-      const result = await deleteDomainFromServer(domainToDelete);
-      notify(result.message);
-      if (!result.ok) return;
-      setDomainToDelete(null);
-      router.refresh();
-    } catch {
-      notify("Spojení se serverem selhalo. Zkuste operaci zopakovat.");
-    } finally {
-      setPendingOperation(null);
-    }
+    const succeeded = await executeJob(`Odstranění domény ${domainToDelete}`, { operation: "domain-delete", arguments: [domainToDelete] });
+    if (succeeded) setDomainToDelete(null);
   }
 
   return (
-    <div className={pendingOperation ? "dashboard-shell operation-pending" : "dashboard-shell"} aria-busy={Boolean(pendingOperation)}>
+    <div className={pendingOperation ? "dashboard-shell operation-pending" : "dashboard-shell"} aria-busy={pendingOperation}>
       <aside className={menuOpen ? "sidebar sidebar-open" : "sidebar"}>
         <div className="brand"><span className="brand-mark"><Cloud size={20} /></span><span>Správa <span>VPS</span></span><button className="mobile-close" onClick={() => setMenuOpen(false)} aria-label="Zavřít navigaci"><X size={20} /></button></div>
         <div className="server-switcher"><span className="server-icon"><Server size={18} /></span><span><strong>Onremote.cz</strong><small>Debian VPS · KVM</small></span><ChevronDown size={16} /></div>
@@ -252,7 +257,7 @@ export default function Dashboard({ adminUsername, snapshot }: { adminUsername: 
       <main className="workspace">
         <header className="topbar"><button className="icon-button menu-button" onClick={() => setMenuOpen(true)} aria-label="Otevřít navigaci"><Menu size={20} /></button><div className="breadcrumbs"><span>Servery</span><b>/</b><strong>Onremote.cz</strong></div><div className="top-actions"><button className="icon-button" aria-label="Oznámení" title="Oznámení"><Bell size={19} /><i /></button><button className="terminal-button" onClick={() => notify("SSH: root@46.28.108.112")}><TerminalSquare size={17} /> Terminál</button></div></header>
         <div className="page-content">
-          {activeSection === "Nastavení" ? <SettingsView notify={notify} /> : activeSection === "Databáze" ? <DatabaseView databases={snapshot.databases} onRefresh={() => router.refresh()} /> : activeSection === "Uživatelé" ? <UsersView users={snapshot.users} onRefresh={() => router.refresh()} /> : <>
+          {activeSection === "Nastavení" ? <SettingsView notify={notify} /> : activeSection === "Databáze" ? <DatabaseView databases={snapshot.databases} onRefresh={() => router.refresh()} runJob={executeJob} /> : activeSection === "Uživatelé" ? <UsersView users={snapshot.users} onRefresh={() => router.refresh()} runJob={executeJob} /> : <>
           <section className="page-heading"><div><div className={snapshot.services.every((service) => service.state !== "Nedostupné") ? "eyebrow neutral" : "eyebrow issue"}><span className={snapshot.services.every((service) => service.state !== "Nedostupné") ? "status-dot" : "status-dot issue"} /> {snapshot.services.every((service) => service.state !== "Nedostupné") ? "Všechny sledované služby jsou dostupné" : "Některá služba vyžaduje pozornost"}</div><h1>Onremote.cz</h1><p>Živý stav z {new Date(snapshot.collectedAt).toLocaleString("cs-CZ")}.</p></div><div className="heading-actions"><button className="secondary-button" onClick={() => router.refresh()}><RefreshCw size={17} /> Obnovit</button><button className="primary-button" onClick={() => setModalOpen(true)}><Plus size={17} /> Přidat doménu</button></div></section>
           <section className="metrics-grid" aria-label="Využití serveru">{snapshot.metrics.map(({ label, value, detail, tone }, index) => { const Icon = metricIcons[index]; return <article className="metric-card" key={label}><span className={`metric-icon ${tone}`}><Icon size={19} /></span><div><span>{label}</span><strong>{value}</strong><small>{detail}</small></div></article>; })}</section>
 
@@ -269,18 +274,18 @@ export default function Dashboard({ adminUsername, snapshot }: { adminUsername: 
           <section className="panel management-panel">
             <div className="panel-header management-header"><div><h2>Správa serveru</h2><p>Domény, DNS a rychlé systémové akce</p></div><div className="quick-actions"><button onClick={() => notify("Záloha byla naplánována")}><Database size={16} /> Vytvořit zálohu</button><button onClick={() => notify("Restart serveru byl naplánován")}><Power size={16} /> Restartovat</button></div></div>
             <div className="domain-toolbar"><div className="search-field"><Search size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Hledat doménu..." aria-label="Hledat doménu" /></div><button className="add-domain-compact" onClick={() => setModalOpen(true)}><Plus size={16} /> Nová doména</button></div>
-            <div className="domain-table-wrap"><table className="domain-table"><thead><tr><th>Doména</th><th>Cíl</th><th>SSL certifikát</th><th>Stav</th><th><span className="sr-only">Akce</span></th></tr></thead><tbody>{filteredDomains.map((domain) => <tr key={domain.key}><td><span className="domain-favicon"><Globe2 size={15} /></span><span className="domain-name"><strong>{domain.name}</strong>{domain.names.length > 1 && <small>včetně {domain.names.filter((name) => name !== domain.name).join(", ")}</small>}{domain.deployment && <small className="deployment-source"><GitBranch size={10} /> {domain.deployment.repository.replace(/^https:\/\/github\.com\//, "").replace(/\.git$/, "")} · {domain.deployment.branch}</small>}</span></td><td className="mono">{domain.target}</td><td><span className={domain.ssl === "Aktivní" ? "table-status success" : "table-status pending"}><ShieldCheck size={14} /> {domain.ssl}</span></td><td><span className={domain.status === "Online" ? "table-status success" : "table-status pending"}><i /> {domain.status}</span></td><td><span className="row-actions"><button className="row-action" onClick={() => setDomainSettings(domain)} aria-label={`Nastavení domény ${domain.name}`} title="Nastavení"><Ellipsis size={18} /></button><button className="row-action delete" disabled={domain.key === "onremote.cz"} onClick={() => setDomainToDelete(domain.key)} aria-label={domain.key === "onremote.cz" ? "Správcovskou doménu nelze odebrat" : `Odebrat doménu ${domain.name}`} title={domain.key === "onremote.cz" ? "Správcovská doména je chráněná" : "Odebrat doménu"}><Trash2 size={16} /></button></span></td></tr>)}</tbody></table>{filteredDomains.length === 0 && <div className="empty-state">Žádná doména neodpovídá hledání.</div>}</div>
+            <div className="domain-table-wrap"><table className="domain-table"><thead><tr><th>Doména</th><th>Cíl</th><th>SSL certifikát</th><th>Stav</th><th><span className="sr-only">Akce</span></th></tr></thead><tbody>{filteredDomains.map((domain) => <tr key={domain.key}><td><span className="domain-favicon"><Globe2 size={15} /></span><span className="domain-name"><strong>{domain.name}</strong>{domain.names.length > 1 && <small>včetně {domain.names.filter((name) => name !== domain.name).join(", ")}</small>}{domain.deployment && <small className="deployment-source"><GitBranch size={10} /> {domain.deployment.repository.replace(/^https:\/\/github\.com\//, "").replace(/\.git$/, "")} · {domain.deployment.branch}</small>}</span></td><td className="mono">{domain.target}</td><td><span className={domain.ssl === "Aktivní" ? "table-status success" : "table-status pending"}><ShieldCheck size={14} /> {domain.ssl}</span></td><td><span className={domain.status === "Online" ? "table-status success" : "table-status pending"}><i /> {domain.status}</span></td><td><span className="row-actions"><button className="row-action" onClick={() => openDomainSettings(domain)} aria-label={`Nastavení domény ${domain.name}`} title="Nastavení"><Ellipsis size={18} /></button><button className="row-action delete" disabled={domain.key === "onremote.cz"} onClick={() => setDomainToDelete(domain.key)} aria-label={domain.key === "onremote.cz" ? "Správcovskou doménu nelze odebrat" : `Odebrat doménu ${domain.name}`} title={domain.key === "onremote.cz" ? "Správcovská doména je chráněná" : "Odebrat doménu"}><Trash2 size={16} /></button></span></td></tr>)}</tbody></table>{filteredDomains.length === 0 && <div className="empty-state">Žádná doména neodpovídá hledání.</div>}</div>
           </section>
           </>}
           <footer><span>Správa VPS · Onremote.cz</span><span><a href="#">Stav služeb</a><a href="#">Dokumentace</a><a href="#">Podpora</a></span></footer>
         </div>
       </main>
 
-      {modalOpen && <div className="modal-backdrop" role="presentation" onMouseDown={() => setModalOpen(false)}><div className="modal deploy-modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" onMouseDown={(event) => event.stopPropagation()}><div className="modal-icon"><Globe2 size={21} /></div><button className="modal-close" onClick={() => setModalOpen(false)} aria-label="Zavřít"><X size={19} /></button><h2 id="modal-title">Přidat novou doménu</h2><p>Nasměrujte doménu na tento server a volitelně ji propojte s GitHub repozitářem.</p><form onSubmit={addDomain}><label htmlFor="domain">Název domény nebo subdomény</label><input id="domain" name="domain" type="text" placeholder="např. app.mujweb.cz" pattern="[a-zA-Z0-9](?:[a-zA-Z0-9.\-]*[a-zA-Z0-9])?" value={newDomainName} onChange={(event) => setNewDomainName(event.target.value)} autoFocus required /><div className="dns-note"><Zap size={17} /><span>DNS A záznam nastavte na <strong>46.28.108.112</strong></span></div><div className="deploy-toggle"><div><strong><GitBranch size={16} /> Nasazovat z GitHubu</strong><small>Repozitář se připraví k prvnímu nasazení na lokální port.</small></div><Toggle checked={githubDeploy} onChange={() => setGithubDeploy((value) => !value)} label="Nasazovat z GitHubu" /></div>{githubDeploy && <div className="deploy-fields"><label htmlFor="github-repository">HTTPS adresa repozitáře</label><input id="github-repository" type="url" value={githubRepository} onChange={(event) => setGithubRepository(event.target.value)} placeholder="https://github.com/uzivatel/repozitar.git" pattern="https://github\.com/.+/.+(?:\.git)?" required /><small className="field-help">Pro soukromý repozitář nastavte deploy key přímo na serveru. Token se zde neukládá.</small><div className="deploy-grid"><label htmlFor="github-branch"><span>Větev</span><input id="github-branch" value={githubBranch} onChange={(event) => setGithubBranch(event.target.value)} pattern="[A-Za-z0-9._/\-]+" required /></label><label htmlFor="deployment-port"><span>Lokální port</span><input id="deployment-port" type="number" min="1024" max="65535" value={deploymentPort} onChange={(event) => setDeploymentPort(Number(event.target.value))} required /></label></div><label className="checkbox-row"><input type="checkbox" checked={autoDeploy} onChange={(event) => setAutoDeploy(event.target.checked)} /> Po napojení webhooku automaticky nasazovat změny</label><div className="deploy-command"><span>Příkaz pro první nasazení</span><code>{deploymentCommand}</code><button type="button" onClick={() => { navigator.clipboard?.writeText(deploymentCommand); notify("Deploy příkaz zkopírován"); }}><Copy size={14} /> Kopírovat</button></div></div>}<div className="modal-actions"><button type="button" onClick={() => setModalOpen(false)}>Zrušit</button><button type="submit" className="primary-button">Přidat doménu</button></div></form></div></div>}
-      {domainSettings && <div className="modal-backdrop" role="presentation" onMouseDown={() => setDomainSettings(null)}><div className="modal domain-settings-modal" role="dialog" aria-modal="true" aria-labelledby="domain-settings-title" onMouseDown={(event) => event.stopPropagation()}><div className="modal-icon"><Settings size={21} /></div><button className="modal-close" onClick={() => setDomainSettings(null)} aria-label="Zavřít"><X size={19} /></button><h2 id="domain-settings-title">Nastavení domény</h2><p>{domainSettings.names.join(" · ")}</p><form className="domain-settings-form" onSubmit={saveDomainSettings}><label htmlFor="domain-target">Cílová adresa</label><input id="domain-target" name="target" defaultValue={groupedDomains.find((domain) => domain.key === domainSettings.key)?.target} placeholder="127.0.0.1:3000" required /><small className="field-help">IP adresa nebo lokální upstream včetně portu.</small><div className="domain-setting-row"><div><strong>Automatické SSL</strong><small>Vystavit a obnovovat certifikát přes Let&apos;s Encrypt.</small></div><Toggle checked={domainSettings.automaticSsl} onChange={() => setDomainSettings((current) => current ? { ...current, automaticSsl: !current.automaticSsl } : current)} label="Automatické SSL" /></div><div className="domain-setting-row"><div><strong>Vynutit HTTPS</strong><small>Přesměrovat všechny HTTP požadavky na HTTPS.</small></div><Toggle checked={domainSettings.forceHttps} onChange={() => setDomainSettings((current) => current ? { ...current, forceHttps: !current.forceHttps } : current)} label="Vynutit HTTPS" /></div>{domainSettings.names.length > 1 && <div className="domain-setting-row"><div><strong>Přesměrovat www</strong><small>Směrovat www variantu na hlavní doménu.</small></div><Toggle checked={domainSettings.wwwRedirect} onChange={() => setDomainSettings((current) => current ? { ...current, wwwRedirect: !current.wwwRedirect } : current)} label="Přesměrovat www" /></div>}<div className="certificate-card"><span className="server-icon"><ShieldCheck size={17} /></span><div><strong>SSL certifikát</strong><small>{domainSettings.ssl === "Aktivní" ? `Aktivní pro ${domainSettings.names.length} ${domainSettings.names.length === 1 ? "hostname" : "hostnames"}` : "Čeká na ověření DNS"}</small></div><button type="button" onClick={renewCertificate}>Obnovit</button></div><div className="modal-actions"><button type="button" onClick={() => setDomainSettings(null)}>Zrušit</button><button type="submit" className="primary-button"><Check size={16} /> Uložit změny</button></div></form></div></div>}
+      {modalOpen && <div className="modal-backdrop" role="presentation" onMouseDown={() => setModalOpen(false)}><div className="modal deploy-modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" onMouseDown={(event) => event.stopPropagation()}><div className="modal-icon"><Globe2 size={21} /></div><button className="modal-close" onClick={() => setModalOpen(false)} aria-label="Zavřít"><X size={19} /></button><h2 id="modal-title">Přidat novou doménu</h2><p>Nasměrujte doménu na tento server a volitelně ji propojte s GitHub repozitářem.</p><form onSubmit={addDomain}><label htmlFor="domain">Název domény nebo subdomény</label><input id="domain" name="domain" type="text" placeholder="např. app.mujweb.cz" pattern="[a-zA-Z0-9](?:[a-zA-Z0-9.\-]*[a-zA-Z0-9])?" value={newDomainName} onChange={(event) => setNewDomainName(event.target.value)} autoFocus required /><div className="dns-note"><Zap size={17} /><span>DNS A záznam nastavte na <strong>46.28.108.112</strong></span></div><div className="deploy-toggle"><div><strong><GitBranch size={16} /> Nasazovat z GitHubu</strong><small>Repozitář se připraví k prvnímu nasazení na lokální port.</small></div><Toggle checked={githubDeploy} onChange={() => setGithubDeploy((value) => !value)} label="Nasazovat z GitHubu" /></div>{githubDeploy && <div className="deploy-fields"><label htmlFor="github-repository">HTTPS adresa repozitáře</label><input id="github-repository" type="url" value={githubRepository} onChange={(event) => setGithubRepository(event.target.value)} placeholder="https://github.com/uzivatel/repozitar.git" pattern="https://github\.com/.+/.+(?:\.git)?" required /><small className="field-help">Pro soukromý repozitář nastavte deploy key přímo na serveru. Token se zde neukládá.</small><div className="deploy-grid"><label htmlFor="github-branch"><span>Větev</span><input id="github-branch" value={githubBranch} onChange={(event) => setGithubBranch(event.target.value)} pattern="[A-Za-z0-9._/\-]+" required /></label><label htmlFor="deployment-port"><span>Lokální port</span><input id="deployment-port" type="number" min="1024" max="65535" value={deploymentPort} onChange={(event) => setDeploymentPort(Number(event.target.value))} required /></label></div></div>}<div className="modal-actions"><button type="button" onClick={() => setModalOpen(false)}>Zrušit</button><button type="submit" className="primary-button">Přidat doménu</button></div></form></div></div>}
+      {domainSettings && <div className="modal-backdrop" role="presentation" onMouseDown={() => setDomainSettings(null)}><div className="modal domain-settings-modal" role="dialog" aria-modal="true" aria-labelledby="domain-settings-title" onMouseDown={(event) => event.stopPropagation()}><div className="modal-icon"><Settings size={21} /></div><button className="modal-close" onClick={() => setDomainSettings(null)} aria-label="Zavřít"><X size={19} /></button><h2 id="domain-settings-title">Nastavení domény</h2><p>{domainSettings.names.join(" · ")}</p><form className="domain-settings-form" onSubmit={saveDomainSettings}><div className="deploy-toggle"><div><strong><GitBranch size={16} /> Nasazovat z GitHubu</strong><small>Repozitář lze připojit nebo změnit i u existující domény.</small></div><Toggle checked={editGithubDeploy} onChange={() => setEditGithubDeploy((value) => !value)} label="Nasazovat z GitHubu" /></div>{editGithubDeploy ? <div className="deploy-fields"><label htmlFor="edit-github-repository">HTTPS adresa repozitáře</label><input id="edit-github-repository" type="url" value={editGithubRepository} onChange={(event) => setEditGithubRepository(event.target.value)} placeholder="https://github.com/uzivatel/repozitar.git" pattern="https://github\.com/.+/.+(?:\.git)?" required /><div className="deploy-grid"><label htmlFor="edit-github-branch"><span>Větev</span><input id="edit-github-branch" value={editGithubBranch} onChange={(event) => setEditGithubBranch(event.target.value)} pattern="[A-Za-z0-9._/\-]+" required /></label><label htmlFor="edit-deployment-port"><span>Lokální port</span><input id="edit-deployment-port" type="number" min="1024" max="65535" value={editDeploymentPort} onChange={(event) => setEditDeploymentPort(Number(event.target.value))} required /></label></div></div> : <><label htmlFor="domain-target">Cílová adresa</label><input id="domain-target" name="target" defaultValue={groupedDomains.find((domain) => domain.key === domainSettings.key)?.target} placeholder="127.0.0.1:3000" required /><small className="field-help">IP adresa nebo lokální upstream včetně portu.</small></>}<div className="domain-setting-row"><div><strong>Automatické SSL</strong><small>Vystavit a obnovovat certifikát přes Let&apos;s Encrypt.</small></div><Toggle checked={domainSettings.automaticSsl} onChange={() => setDomainSettings((current) => current ? { ...current, automaticSsl: !current.automaticSsl } : current)} label="Automatické SSL" /></div><div className="domain-setting-row"><div><strong>Vynutit HTTPS</strong><small>Přesměrovat všechny HTTP požadavky na HTTPS.</small></div><Toggle checked={domainSettings.forceHttps} onChange={() => setDomainSettings((current) => current ? { ...current, forceHttps: !current.forceHttps } : current)} label="Vynutit HTTPS" /></div>{domainSettings.names.length > 1 && <div className="domain-setting-row"><div><strong>Přesměrovat www</strong><small>Směrovat www variantu na hlavní doménu.</small></div><Toggle checked={domainSettings.wwwRedirect} onChange={() => setDomainSettings((current) => current ? { ...current, wwwRedirect: !current.wwwRedirect } : current)} label="Přesměrovat www" /></div>}<div className="certificate-card"><span className="server-icon"><ShieldCheck size={17} /></span><div><strong>SSL certifikát</strong><small>{domainSettings.ssl === "Aktivní" ? `Aktivní pro ${domainSettings.names.length} ${domainSettings.names.length === 1 ? "hostname" : "hostnames"}` : "Čeká na ověření DNS"}</small></div><button type="button" onClick={renewCertificate}>Obnovit</button></div><div className="modal-actions"><button type="button" onClick={() => setDomainSettings(null)}>Zrušit</button><button type="submit" className="primary-button"><Check size={16} /> Uložit změny</button></div></form></div></div>}
       {domainForDeletion && <div className="modal-backdrop" role="presentation" onMouseDown={() => setDomainToDelete(null)}><div className="modal delete-modal" role="alertdialog" aria-modal="true" aria-labelledby="delete-title" aria-describedby="delete-description" onMouseDown={(event) => event.stopPropagation()}><div className="modal-icon danger"><Trash2 size={21} /></div><button className="modal-close" onClick={() => setDomainToDelete(null)} aria-label="Zavřít"><X size={19} /></button><h2 id="delete-title">Odstranit doménu a aplikaci?</h2><p id="delete-description">Doména <strong>{domainForDeletion.names.join(" a ")}</strong>, její systemd služba, certifikát a data v <strong>/srv/apps/{domainForDeletion.key}</strong> budou trvale odstraněny.</p><div className="modal-actions"><button type="button" onClick={() => setDomainToDelete(null)}>Zrušit</button><button type="button" className="danger-button" onClick={deleteDomain}>Trvale odstranit</button></div></div></div>}
-      {pendingOperation && <div className="toast pending" role="status" aria-live="polite"><RefreshCw size={17} /> {pendingOperation}</div>}
-      {!pendingOperation && toast && <div className="toast" role="status" aria-live="polite"><Check size={17} /> {toast}</div>}
+      {adminJob && <AdminJobProgress job={adminJob} onClose={() => setAdminJob(null)} />}
+      {!adminJob && toast && <div className="toast" role="status" aria-live="polite"><Check size={17} /> {toast}</div>}
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import "server-only";
 
 import { execFileSync } from "node:child_process";
-import { readFileSync, readdirSync, statfsSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statfsSync } from "node:fs";
 import { networkInterfaces, cpus, freemem, hostname, loadavg, platform, release, totalmem, uptime } from "node:os";
 import { parse } from "node:path";
 
@@ -26,6 +26,11 @@ export type DomainStatus = {
   automaticSsl: boolean;
   forceHttps: boolean;
   wwwRedirect: boolean;
+  deployment?: {
+    repository: string;
+    branch: string;
+    port: number;
+  };
 };
 
 export type DatabaseCluster = {
@@ -35,6 +40,7 @@ export type DatabaseCluster = {
   owner: string;
   size: string;
   status: "Online" | "Neaktivní";
+  managed: boolean;
 };
 
 export type SystemUser = {
@@ -43,6 +49,7 @@ export type SystemUser = {
   home: string;
   shell: string;
   sshKeys: number | null;
+  managed: boolean;
   status: "Aktivní" | "Blokovaný";
 };
 
@@ -133,6 +140,11 @@ function readDomains(): DomainStatus[] {
       const listening = target === "Přesměrování" || run("sh", ["-c", `ss -ltnH | grep -q ':${target.split(":").at(-1)} ' && echo yes`]) === "yes";
 
       for (const name of names.filter((value) => value !== "_" && !value.includes("$"))) {
+        let deployment: DomainStatus["deployment"];
+        try {
+          const [repository, branch, port] = readFileSync(`/var/lib/vps-dashboard/apps/${name.replace(/^www\./, "")}`, "utf8").trim().split("\t");
+          if (repository && branch && Number.isInteger(Number(port))) deployment = { repository, branch, port: Number(port) };
+        } catch {}
         domains.set(name, {
           name,
           target,
@@ -141,6 +153,7 @@ function readDomains(): DomainStatus[] {
           automaticSsl: config.includes("managed by Certbot") || config.includes("/etc/letsencrypt/"),
           forceHttps: redirectsToHttps,
           wwwRedirect: name.startsWith("www.") && target === "Přesměrování",
+          deployment,
         });
       }
     }
@@ -155,7 +168,7 @@ function readDatabases(): DatabaseCluster[] {
     const [version, name, port, status, owner, dataDirectory] = line.trim().split(/\s+/);
     if (!version || !name || !port || !status || !owner) return [];
     const size = dataDirectory ? run("du", ["-sh", dataDirectory]).split(/\s+/)[0] : "";
-    return [{ name, version, port: Number(port), owner, size: size || "Nezjištěno", status: status === "online" ? "Online" as const : "Neaktivní" as const }];
+    return [{ name, version, port: Number(port), owner, size: size || "Nezjištěno", status: status === "online" ? "Online" as const : "Neaktivní" as const, managed: existsSync(`/var/lib/vps-dashboard/clusters/${version}-${name}`) }];
   });
 }
 
@@ -170,7 +183,7 @@ function readUsers(): SystemUser[] {
       try {
         sshKeys = readFileSync(`${home}/.ssh/authorized_keys`, "utf8").split("\n").filter((entry) => entry.trim() && !entry.trim().startsWith("#")).length;
       } catch {}
-      return [{ username, uid, home, shell, sshKeys, status: blocked ? "Blokovaný" as const : "Aktivní" as const }];
+      return [{ username, uid, home, shell, sshKeys, status: blocked ? "Blokovaný" as const : "Aktivní" as const, managed: existsSync(`/var/lib/vps-dashboard/users/${username}`) }];
     });
   } catch {
     return [];
