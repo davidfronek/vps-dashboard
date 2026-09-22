@@ -6,12 +6,8 @@ export type AdminOperation =
   | "user-create"
   | "user-update"
   | "user-delete"
-  | "cluster-create"
-  | "cluster-update"
-  | "cluster-delete"
-  | "cluster-start"
-  | "cluster-stop"
-  | "cluster-restart";
+  | "database-create"
+  | "database-delete";
 
 export type AdminJobRequest = {
   operation: AdminOperation;

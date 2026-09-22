@@ -11,12 +11,11 @@ const REPOSITORY = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\
 const BRANCH = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 const USERNAME = /^[a-z_][a-z0-9_-]{0,30}$/;
 const SSH_KEY = /^ssh-(?:ed25519|rsa) [A-Za-z0-9+/=]+(?: .*)?$/;
-const VERSION = /^[0-9]{2}$/;
-const CLUSTER = /^[a-z][a-z0-9_-]{0,30}$/;
+const DATABASE_NAME = /^[a-z][a-z0-9_]{0,62}$/;
 const OPERATIONS = new Set<AdminOperation>([
   "domain-upsert", "domain-deploy", "domain-renew", "domain-delete",
   "user-create", "user-update", "user-delete",
-  "cluster-create", "cluster-update", "cluster-delete", "cluster-start", "cluster-stop", "cluster-restart",
+  "database-create", "database-delete",
 ]);
 
 function validFlag(value: string) {
@@ -44,9 +43,9 @@ function validRequest(value: unknown): value is AdminJobRequest {
     if (request.operation === "user-update") return args.length === 1 && validFlag(args[0]);
     return args.length === 0;
   }
-  if (!subject || !VERSION.test(subject) || !CLUSTER.test(args[0] ?? "")) return false;
-  if (request.operation === "cluster-create" || request.operation === "cluster-update") return args.length === 2 && validPort(args[1]);
-  return args.length === 1;
+  if (!subject || !DATABASE_NAME.test(subject)) return false;
+  if (request.operation === "database-create") return args.length === 2 && DATABASE_NAME.test(args[0]) && args[1].length >= 12 && args[1].length <= 128;
+  return request.operation === "database-delete" && args.length === 0;
 }
 
 export async function POST(request: NextRequest) {
@@ -63,7 +62,9 @@ export async function POST(request: NextRequest) {
 
   const id = randomBytes(16).toString("hex");
   try {
-    execFileSync("sudo", ["-n", HELPER, "enqueue", id, body.operation, ...body.arguments], { encoding: "utf8", timeout: 5_000, stdio: ["ignore", "pipe", "pipe"] });
+    const helperArguments = body.operation === "database-create" ? body.arguments.slice(0, -1) : body.arguments;
+    const input = body.operation === "database-create" ? `${body.arguments.at(-1)}\n` : undefined;
+    execFileSync("sudo", ["-n", HELPER, "enqueue", id, body.operation, ...helperArguments], { encoding: "utf8", input, timeout: 5_000, stdio: [input ? "pipe" : "ignore", "pipe", "pipe"] });
     return NextResponse.json({ id }, { status: 202 });
   } catch (error) {
     console.error("Failed to enqueue admin job", error instanceof Error ? error.message : error);

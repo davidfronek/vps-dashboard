@@ -33,13 +33,11 @@ export type DomainStatus = {
   };
 };
 
-export type DatabaseCluster = {
+export type PostgreSqlDatabase = {
   name: string;
-  version: string;
-  port: number;
   owner: string;
   size: string;
-  status: "Online" | "Neaktivní";
+  connections: number;
   managed: boolean;
 };
 
@@ -58,7 +56,7 @@ export type ServerSnapshot = {
   metrics: Metric[];
   services: ServiceStatus[];
   domains: DomainStatus[];
-  databases: DatabaseCluster[];
+  databases: PostgreSqlDatabase[];
   users: SystemUser[];
   server: {
     ipAddress: string;
@@ -163,12 +161,11 @@ function readDomains(): DomainStatus[] {
   }
 }
 
-function readDatabases(): DatabaseCluster[] {
-  return run("pg_lsclusters", ["--no-header"]).split("\n").filter(Boolean).flatMap((line) => {
-    const [version, name, port, status, owner, dataDirectory] = line.trim().split(/\s+/);
-    if (!version || !name || !port || !status || !owner) return [];
-    const size = dataDirectory ? run("du", ["-sh", dataDirectory]).split(/\s+/)[0] : "";
-    return [{ name, version, port: Number(port), owner, size: size || "Nezjištěno", status: status === "online" ? "Online" as const : "Neaktivní" as const, managed: existsSync(`/var/lib/vps-dashboard/clusters/${version}-${name}`) }];
+function readDatabases(): PostgreSqlDatabase[] {
+  return run("sudo", ["-n", "/usr/local/sbin/vps-dashboard-domains", "database-list"]).split("\n").filter(Boolean).flatMap((line) => {
+    const [name, owner, size, connections] = line.split("\t");
+    if (!name || !owner || !size) return [];
+    return [{ name, owner, size, connections: Number(connections) || 0, managed: existsSync(`/var/lib/vps-dashboard/databases/${name}`) }];
   });
 }
 

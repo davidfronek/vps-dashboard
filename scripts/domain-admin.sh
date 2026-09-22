@@ -11,7 +11,7 @@ STATE_DIR="/var/lib/vps-dashboard"
 JOB_DIR="$STATE_DIR/jobs"
 APP_STATE_DIR="$STATE_DIR/apps"
 USER_STATE_DIR="$STATE_DIR/users"
-CLUSTER_STATE_DIR="$STATE_DIR/clusters"
+DATABASE_STATE_DIR="$STATE_DIR/databases"
 LOCK_DIR="$STATE_DIR/locks"
 
 job_line() {
@@ -32,12 +32,8 @@ job_title() {
     user-create) echo "Vytvoření uživatele $2" ;;
     user-update) echo "Změna přístupu uživatele $2" ;;
     user-delete) echo "Odstranění uživatele $2" ;;
-    cluster-create) echo "Vytvoření PostgreSQL clusteru $2/$3" ;;
-    cluster-update) echo "Změna PostgreSQL clusteru $2/$3" ;;
-    cluster-delete) echo "Odstranění PostgreSQL clusteru $2/$3" ;;
-    cluster-start) echo "Spuštění PostgreSQL clusteru $2/$3" ;;
-    cluster-stop) echo "Zastavení PostgreSQL clusteru $2/$3" ;;
-    cluster-restart) echo "Restart PostgreSQL clusteru $2/$3" ;;
+    database-create) echo "Vytvoření PostgreSQL databáze $2" ;;
+    database-delete) echo "Odstranění PostgreSQL databáze $2" ;;
     *) echo "Správa serveru" ;;
   esac
 }
@@ -49,19 +45,35 @@ if [[ $ACTION == "status" ]]; then
   exit
 fi
 
+if [[ $ACTION == "database-list" ]]; then
+  runuser -u postgres -- psql --dbname postgres --no-align --tuples-only --field-separator=$'\t' --command="SELECT d.datname, pg_get_userbyid(d.datdba), pg_size_pretty(pg_database_size(d.datname)), (SELECT count(*) FROM pg_stat_activity a WHERE a.datname = d.datname) FROM pg_database d WHERE NOT d.datistemplate ORDER BY d.datname"
+  exit
+fi
+
 if [[ $ACTION == "enqueue" ]]; then
   JOB_ID="$SUBJECT"
   OPERATION="${3:-}"
   shift 3
   [[ $JOB_ID =~ ^[a-f0-9]{32}$ ]] || { echo "Invalid job id." >&2; exit 1; }
-  [[ $OPERATION =~ ^(domain-(upsert|deploy|renew|delete)|user-(create|update|delete)|cluster-(create|update|delete|start|stop|restart))$ ]] || { echo "Unsupported operation." >&2; exit 1; }
-  install -d -o root -g www-data -m 0750 "$JOB_DIR" "$APP_STATE_DIR" "$USER_STATE_DIR" "$CLUSTER_STATE_DIR" "$LOCK_DIR"
+  [[ $OPERATION =~ ^(domain-(upsert|deploy|renew|delete)|user-(create|update|delete)|database-(create|delete))$ ]] || { echo "Unsupported operation." >&2; exit 1; }
+  install -d -o root -g www-data -m 0750 "$JOB_DIR" "$APP_STATE_DIR" "$USER_STATE_DIR" "$DATABASE_STATE_DIR" "$LOCK_DIR"
   find "$JOB_DIR" -type f -mtime +7 -delete
   JOB_FILE="$JOB_DIR/$JOB_ID"
   install -o root -g www-data -m 0640 /dev/null "$JOB_FILE"
   job_line STATUS queued
   job_line TITLE "$(job_title "$OPERATION" "${1:-}" "${2:-}")"
-  systemd-run --quiet --collect --unit="vps-dashboard-job-$JOB_ID" "$0" run-job "$JOB_ID" "$OPERATION" "$@"
+  if [[ $OPERATION == database-create ]]; then
+    SECRET_FILE="$JOB_DIR/$JOB_ID.secret"
+    IFS= read -r PASSWORD
+    install -o root -g root -m 0600 /dev/null "$SECRET_FILE"
+    printf '%s' "$PASSWORD" > "$SECRET_FILE"
+    unset PASSWORD
+    set -- "$1" "$2" "$SECRET_FILE"
+  fi
+  if ! systemd-run --quiet --collect --unit="vps-dashboard-job-$JOB_ID" "$0" run-job "$JOB_ID" "$OPERATION" "$@"; then
+    rm -f "${SECRET_FILE:-}"
+    exit 1
+  fi
   echo "$JOB_ID"
   exit
 fi
@@ -121,6 +133,10 @@ valid_cluster() {
 
 valid_port() {
   [[ $1 =~ ^[0-9]+$ ]] && (( $1 >= 1024 && $1 <= 65535 ))
+}
+
+valid_database_name() {
+  [[ $1 =~ ^[a-z][a-z0-9_]{0,62}$ ]]
 }
 
 wedos_request() {
@@ -428,44 +444,46 @@ EOF
     userdel --remove -- "$USERNAME"
     rm -f "$USER_STATE_DIR/$USERNAME"
     ;;
-  cluster-create)
-    VERSION="$SUBJECT"; CLUSTER="${3:-}"; PORT="${4:-}"
-    valid_cluster "$VERSION" "$CLUSTER" && valid_port "$PORT" || { echo "Invalid cluster settings." >&2; exit 1; }
-    [[ $CLUSTER != main ]] || { echo "The main cluster is protected." >&2; exit 1; }
-    step "Vytvářím PostgreSQL cluster"
-    pg_createcluster --port "$PORT" --start "$VERSION" "$CLUSTER"
-    install -o root -g www-data -m 0640 /dev/null "$CLUSTER_STATE_DIR/$VERSION-$CLUSTER"
-    ;;
-  cluster-update)
-    VERSION="$SUBJECT"; CLUSTER="${3:-}"; PORT="${4:-}"
-    valid_cluster "$VERSION" "$CLUSTER" && valid_port "$PORT" || { echo "Invalid cluster settings." >&2; exit 1; }
-    [[ $CLUSTER != main ]] || { echo "The main cluster is protected." >&2; exit 1; }
-    [[ -f $CLUSTER_STATE_DIR/$VERSION-$CLUSTER ]] || { echo "Cluster is not managed by the dashboard." >&2; exit 1; }
-    ! ss -ltnH "sport = :$PORT" | grep -q . || { echo "Port is already in use." >&2; exit 1; }
-    OLD_PORT="$(pg_conftool "$VERSION" "$CLUSTER" show port)"
-    trap 'pg_conftool "$VERSION" "$CLUSTER" set port "$OLD_PORT"; pg_ctlcluster "$VERSION" "$CLUSTER" restart' ERR
-    step "Ukládám nový port clusteru"
-    pg_conftool "$VERSION" "$CLUSTER" set port "$PORT"
-    step "Restartuji PostgreSQL cluster"
-    pg_ctlcluster "$VERSION" "$CLUSTER" restart
+  database-create)
+    DATABASE="$SUBJECT"; OWNER="${3:-}"; SECRET_FILE="${4:-}"
+    valid_database_name "$DATABASE" && valid_database_name "$OWNER" || { echo "Invalid database settings." >&2; exit 1; }
+    [[ $SECRET_FILE == "$JOB_DIR/"*.secret && -f $SECRET_FILE ]] || { echo "Database password is unavailable." >&2; exit 1; }
+    PASSWORD="$(cat "$SECRET_FILE")"
+    rm -f "$SECRET_FILE"
+    (( ${#PASSWORD} >= 12 && ${#PASSWORD} <= 128 )) || { echo "Invalid password length." >&2; exit 1; }
+    [[ $DATABASE != postgres && $DATABASE != template0 && $DATABASE != template1 ]] || { echo "System database is protected." >&2; exit 1; }
+    ! runuser -u postgres -- psql --dbname postgres --tuples-only --no-align --command="SELECT 1 FROM pg_database WHERE datname = '$DATABASE'" | grep -q 1 || { echo "Database already exists." >&2; exit 1; }
+    ROLE_EXISTED="$(runuser -u postgres -- psql --dbname postgres --tuples-only --no-align --command="SELECT 1 FROM pg_roles WHERE rolname = '$OWNER'")"
+    SQL_FILE="$(mktemp)"
+    chmod 0600 "$SQL_FILE"
+    PASSWORD_LITERAL="$(DB_PASSWORD="$PASSWORD" node -e 'process.stdout.write("'"'"'"+process.env.DB_PASSWORD.replaceAll("'"'"'","'"'"''"'"'")+"'"'"'")')"
+    printf '%s\n' "SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', '$OWNER', $PASSWORD_LITERAL) WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '$OWNER') \\gexec" > "$SQL_FILE"
+    unset PASSWORD PASSWORD_LITERAL
+    trap 'rm -f "$SQL_FILE"; [[ -n $ROLE_EXISTED ]] || runuser -u postgres -- dropuser --if-exists -- "$OWNER" 2>/dev/null || true' ERR
+    step "Vytvářím databázového uživatele"
+    runuser -u postgres -- psql --dbname postgres --set=ON_ERROR_STOP=1 --file="$SQL_FILE"
+    rm -f "$SQL_FILE"
+    step "Vytvářím PostgreSQL databázi"
+    runuser -u postgres -- createdb --owner="$OWNER" --encoding=UTF8 -- "$DATABASE"
+    install -d -o root -g www-data -m 0750 "$DATABASE_STATE_DIR"
+    printf '%s\n' "$OWNER" > "$DATABASE_STATE_DIR/$DATABASE"
+    chown root:www-data "$DATABASE_STATE_DIR/$DATABASE"
+    chmod 0640 "$DATABASE_STATE_DIR/$DATABASE"
     trap - ERR
     ;;
-  cluster-start|cluster-stop|cluster-restart)
-    VERSION="$SUBJECT"; CLUSTER="${3:-}"; COMMAND="${ACTION#cluster-}"
-    valid_cluster "$VERSION" "$CLUSTER" || { echo "Invalid cluster." >&2; exit 1; }
-    [[ $CLUSTER != main || $COMMAND == restart ]] || { echo "The main cluster cannot be stopped from the dashboard." >&2; exit 1; }
-    [[ $CLUSTER == main || -f $CLUSTER_STATE_DIR/$VERSION-$CLUSTER ]] || { echo "Cluster is not managed by the dashboard." >&2; exit 1; }
-    step "Provádím akci $COMMAND"
-    pg_ctlcluster "$VERSION" "$CLUSTER" "$COMMAND"
-    ;;
-  cluster-delete)
-    VERSION="$SUBJECT"; CLUSTER="${3:-}"
-    valid_cluster "$VERSION" "$CLUSTER" || { echo "Invalid cluster." >&2; exit 1; }
-    [[ $CLUSTER != main ]] || { echo "The main cluster is protected." >&2; exit 1; }
-    [[ -f $CLUSTER_STATE_DIR/$VERSION-$CLUSTER ]] || { echo "Cluster is not managed by the dashboard." >&2; exit 1; }
-    step "Zastavuji a odstraňuji PostgreSQL cluster"
-    pg_dropcluster --stop "$VERSION" "$CLUSTER"
-    rm -f "$CLUSTER_STATE_DIR/$VERSION-$CLUSTER"
+  database-delete)
+    DATABASE="$SUBJECT"
+    valid_database_name "$DATABASE" || { echo "Invalid database." >&2; exit 1; }
+    [[ -f $DATABASE_STATE_DIR/$DATABASE ]] || { echo "Database is not managed by the dashboard." >&2; exit 1; }
+    OWNER="$(cat "$DATABASE_STATE_DIR/$DATABASE")"
+    step "Ukončuji připojení k databázi"
+    runuser -u postgres -- psql --dbname postgres --set=ON_ERROR_STOP=1 --command="SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$DATABASE' AND pid <> pg_backend_pid()"
+    step "Odstraňuji PostgreSQL databázi"
+    runuser -u postgres -- dropdb --if-exists -- "$DATABASE"
+    if valid_database_name "$OWNER" && ! runuser -u postgres -- psql --dbname postgres --tuples-only --no-align --command="SELECT 1 FROM pg_database WHERE pg_get_userbyid(datdba) = '$OWNER'" | grep -q 1; then
+      runuser -u postgres -- dropuser --if-exists -- "$OWNER"
+    fi
+    rm -f "$DATABASE_STATE_DIR/$DATABASE"
     ;;
   *)
     echo "Unsupported action." >&2
