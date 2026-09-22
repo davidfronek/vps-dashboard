@@ -123,6 +123,46 @@ valid_port() {
   [[ $1 =~ ^[0-9]+$ ]] && (( $1 >= 1024 && $1 <= 65535 ))
 }
 
+wedos_request() {
+  local command="$1" data="$2" output="$3"
+  local hour password_hash auth request_file
+  hour="$(TZ=Europe/Prague date +%H)"
+  password_hash="$(printf '%s' "$WEDOS_WAPI_PASSWORD" | sha1sum | cut -d' ' -f1)"
+  auth="$(printf '%s%s%s' "$WEDOS_WAPI_USER" "$password_hash" "$hour" | sha1sum | cut -d' ' -f1)"
+  request_file="$output.request"
+  WEDOS_AUTH="$auth" WEDOS_DATA="$data" node -e 'process.stdout.write(JSON.stringify({request:{user:process.env.WEDOS_WAPI_USER,auth:process.env.WEDOS_AUTH,command:process.argv[1],clTRID:`vps-dashboard-${Date.now()}`,data:JSON.parse(process.env.WEDOS_DATA)}}))' "$command" > "$request_file"
+  chmod 0600 "$request_file"
+  curl -4 --fail --silent --show-error --max-time 60 -H 'Content-Type: application/x-www-form-urlencoded' --data-urlencode "request@$request_file" "$WEDOS_WAPI_ENDPOINT" > "$output"
+  rm -f "$request_file"
+  node -e 'let x;try{x=require(process.argv[1])}catch{console.error("WAPI returned invalid JSON");process.exit(1)}const r=x?.response;if(Number(r?.code)!==1000){console.error(`WAPI ${r?.code??"?"}: ${r?.result??"invalid response"}`);process.exit(1)}' "$output"
+}
+
+ensure_wedos_a_record() (
+  local domain="$1" ip="46.28.108.112" config="/etc/vps-dashboard/wedos.env"
+  [[ -f $config ]] || return 0
+  set -a
+  source "$config"
+  set +a
+  local workdir zone record_name action row_id
+  workdir="$(mktemp -d)"
+  trap 'rm -rf -- "$workdir"' EXIT
+  wedos_request dns-domains-list '{}' "$workdir/domains.json"
+  zone="$(node -e 'const d=require(process.argv[1]).response.data?.domain??[];const list=Array.isArray(d)?d:Object.values(d);const h=process.argv[2];const z=list.map(x=>x.name).filter(x=>h===x||h.endsWith(`.${x}`)).sort((a,b)=>b.length-a.length);process.stdout.write(z[0]??"")' "$workdir/domains.json" "$domain")"
+  [[ -n $zone ]] || { echo "WAPI DNS zone for $domain was not found." >&2; return 1; }
+  record_name="${domain%.$zone}"
+  [[ $record_name != "$domain" ]] || record_name=""
+  wedos_request dns-rows-list "$(node -e 'process.stdout.write(JSON.stringify({domain:process.argv[1]}))' "$zone")" "$workdir/rows.json"
+  IFS='|' read -r action row_id < <(node -e 'const d=require(process.argv[1]).response.data??{};const r=d.row??d;const rows=Array.isArray(r)?r:Object.values(r).filter(x=>x&&typeof x==="object"&&!Array.isArray(x));const n=process.argv[2],ip=process.argv[3];const row=rows.find(x=>String(x.name??"")===n&&String(x.rdtype??x.type??"").toUpperCase()==="A");process.stdout.write(row?(String(row.rdata)===ip?"keep|":"update|"+row.ID):"add|")' "$workdir/rows.json" "$record_name" "$ip")
+  if [[ $action == add ]]; then
+    wedos_request dns-row-add "$(node -e 'process.stdout.write(JSON.stringify({domain:process.argv[1],name:process.argv[2],ttl:"300",type:"A",rdata:process.argv[3],author_comment:"VPS dashboard"}))' "$zone" "$record_name" "$ip")" "$workdir/change.json"
+  elif [[ $action == update ]]; then
+    wedos_request dns-row-update "$(node -e 'process.stdout.write(JSON.stringify({domain:process.argv[1],row_id:process.argv[2],ttl:"300",rdata:process.argv[3],author_comment:"VPS dashboard"}))' "$zone" "$row_id" "$ip")" "$workdir/change.json"
+  else
+    return 0
+  fi
+  wedos_request dns-domain-commit "$(node -e 'process.stdout.write(JSON.stringify({name:process.argv[1]}))' "$zone")" "$workdir/commit.json"
+)
+
 write_proxy_config() {
   local DOMAIN="$SUBJECT"
   local target="$1" force_https="$2" www_redirect="$3"
@@ -197,6 +237,8 @@ EOF
       chown www-data:www-data "$APP_DIR/index.html"
       chmod 0640 "$APP_DIR/index.html"
     fi
+    step "Nastavuji A záznam ve WEDOS DNS"
+    ensure_wedos_a_record "$DOMAIN"
     write_proxy_config "${3:-}" "${4:-}" "${5:-}" "${6:-}"
     rm -f "$APP_STATE_DIR/$DOMAIN"
     ;;
@@ -234,6 +276,8 @@ EOF
     runuser -u www-data -- env HOME="$TEMP_DIR" npm_config_cache="$TEMP_DIR/.npm" npm --prefix "$TEMP_DIR" ci
     step "Sestavuji aplikaci"
     runuser -u www-data -- env HOME="$TEMP_DIR" npm_config_cache="$TEMP_DIR/.npm" npm --prefix "$TEMP_DIR" run build
+    step "Nastavuji A záznam ve WEDOS DNS"
+    ensure_wedos_a_record "$DOMAIN"
     BACKUP_DIR=""
     [[ ! -f $SERVICE_FILE ]] || cp -a "$SERVICE_FILE" "$SERVICE_BACKUP"
     [[ ! -f $NGINX_AVAILABLE/$DOMAIN ]] || cp -a "$NGINX_AVAILABLE/$DOMAIN" "$NGINX_BACKUP"
