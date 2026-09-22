@@ -20,7 +20,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
     <main className="login-page">
       <section className="login-panel" aria-labelledby="login-title">
         <div className="login-brand"><span><Cloud size={21} /></span> Správa VPS</div>
-        <div className="login-server"><span><Server size={18} /></span><div><strong>Produkční server</strong><small>46.28.108.112</small></div></div>
+        <div className="login-server"><span><Server size={18} /></span><div><strong>Onremote.cz</strong><small>46.28.108.112</small></div></div>
         <div className="login-heading"><span><LockKeyhole size={20} /></span><h1 id="login-title">Přihlášení do správy</h1><p>Zadejte účet správce serveru.</p></div>
         {message && <p className="login-error" role="alert">{message}</p>}
         {!configured && <p className="login-error" role="alert">Nastavte proměnné <code>ADMIN_USERNAME</code>, <code>ADMIN_PASSWORD_HASH</code> a <code>AUTH_SECRET</code>.</p>}

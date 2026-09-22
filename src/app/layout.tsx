@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Správa VPS | Produkční server",
+  title: "Správa VPS | Onremote.cz",
   description: "Přehled a správa VPS serveru, domén a systémových služeb.",
 };
 
