@@ -183,6 +183,20 @@ case "$ACTION" in
     DOMAIN="$SUBJECT"
     valid_domain "$DOMAIN" || { echo "Invalid domain." >&2; exit 1; }
     step "Ověřuji nastavení domény"
+    APP_DIR="/srv/apps/$DOMAIN"
+    step "Zakládám prostor /srv/apps/$DOMAIN"
+    install -d -o www-data -g www-data -m 0750 "$APP_DIR"
+    if [[ ! -e $APP_DIR/index.html ]]; then
+      cat > "$APP_DIR/index.html" <<EOF
+<!doctype html>
+<html lang="cs">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>$DOMAIN</title></head>
+<body><main><h1>$DOMAIN</h1><p>Prostor domény je připraven.</p></main></body>
+</html>
+EOF
+      chown www-data:www-data "$APP_DIR/index.html"
+      chmod 0640 "$APP_DIR/index.html"
+    fi
     write_proxy_config "${3:-}" "${4:-}" "${5:-}" "${6:-}"
     rm -f "$APP_STATE_DIR/$DOMAIN"
     ;;
