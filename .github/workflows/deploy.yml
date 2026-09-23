@@ -1,0 +1,21 @@
+name: 🚀 Signalizace změn na VPS
+
+on:
+  push:
+    branches:
+      - main  # Spustí se při pushi do hlavní větve main
+
+jobs:
+  signal-vps:
+    runs-on: ubuntu-latest
+    steps:
+    - name: 🔐 Spuštění aktualizace na VPS přes SSH
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.SSH_HOST }}
+        username: ${{ secrets.SSH_USER }}
+        key: ${{ secrets.SSH_KEY }}
+        port: ${{ secrets.SSH_PORT }}
+        script: |
+          # Spustí centrální skript a předá mu název tohoto repozitáře z GitHubu
+          /usr/local/bin/update-apps.sh "${{ github.event.repository.name }}"

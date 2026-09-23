@@ -10,6 +10,7 @@ export type Metric = {
   value: string;
   detail: string;
   tone: "blue" | "green" | "amber" | "violet";
+  usagePercent?: number;
 };
 
 export type ServiceStatus = {
@@ -68,6 +69,8 @@ export type ServerSnapshot = {
   };
 };
 
+let previousCpuSample: { idle: number; total: number } | null = null;
+
 function run(command: string, args: string[] = []) {
   try {
     return execFileSync(command, args, { encoding: "utf8", timeout: 2_000, stdio: ["ignore", "pipe", "ignore"] }).trim();
@@ -88,10 +91,26 @@ function formatBytes(value: number) {
 }
 
 function formatUptime(seconds: number) {
-  const days = Math.floor(seconds / 86_400);
-  const hours = Math.floor((seconds % 86_400) / 3_600);
-  const minutes = Math.floor((seconds % 3_600) / 60);
-  return days > 0 ? `${days} d ${hours} h` : `${hours} h ${minutes} min`;
+  const wholeSeconds = Math.floor(seconds);
+  const days = Math.floor(wholeSeconds / 86_400);
+  const hours = Math.floor((wholeSeconds % 86_400) / 3_600);
+  const minutes = Math.floor((wholeSeconds % 3_600) / 60);
+  const remainingSeconds = wholeSeconds % 60;
+  return `${days} d ${hours} h ${minutes} min ${remainingSeconds} s`;
+}
+
+function readCpuPercent() {
+  const cpuList = cpus();
+  const current = cpuList.reduce((sample, cpu) => {
+    const total = Object.values(cpu.times).reduce((sum, value) => sum + value, 0);
+    return { idle: sample.idle + cpu.times.idle, total: sample.total + total };
+  }, { idle: 0, total: 0 });
+  const previous = previousCpuSample;
+  previousCpuSample = current;
+  if (!previous) return Math.min(100, Math.round((loadavg()[0] / Math.max(cpuList.length, 1)) * 100));
+  const totalDelta = current.total - previous.total;
+  const idleDelta = current.idle - previous.idle;
+  return totalDelta > 0 ? Math.min(100, Math.max(0, Math.round((1 - idleDelta / totalDelta) * 100))) : 0;
 }
 
 function readOperatingSystem() {
@@ -132,10 +151,12 @@ function readDomains(): DomainStatus[] {
     for (const file of files) {
       const config = readFileSync(`/etc/nginx/sites-enabled/${file}`, "utf8");
       const names = [...config.matchAll(/server_name\s+([^;]+);/g)].flatMap((match) => match[1].trim().split(/\s+/));
-      const target = config.match(/proxy_pass\s+https?:\/\/([^;]+);/)?.[1] ?? "Přesměrování";
+      const proxyTarget = config.match(/proxy_pass\s+https?:\/\/([^;]+);/)?.[1];
+      const staticRoot = config.match(/root\s+([^;]+);/)?.[1];
+      const target = proxyTarget ?? staticRoot ?? "Přesměrování";
       const hasTls = /listen\s+(?:\[[^\]]+\]:)?443\s+ssl/.test(config);
       const redirectsToHttps = /return\s+30[1278]\s+https:\/\//.test(config);
-      const listening = target === "Přesměrování" || run("sh", ["-c", `ss -ltnH | grep -q ':${target.split(":").at(-1)} ' && echo yes`]) === "yes";
+      const listening = Boolean(staticRoot) || target === "Přesměrování" || run("sh", ["-c", `ss -ltnH | grep -q ':${target.split(":").at(-1)} ' && echo yes`]) === "yes";
 
       for (const name of names.filter((value) => value !== "_" && !value.includes("$"))) {
         let deployment: DomainStatus["deployment"];
@@ -189,13 +210,15 @@ function readUsers(): SystemUser[] {
 
 export function getServerSnapshot(): ServerSnapshot {
   const cpuCount = cpus().length;
-  const loadPercent = Math.min(999, Math.round((loadavg()[0] / Math.max(cpuCount, 1)) * 100));
+  const loadPercent = readCpuPercent();
   const totalMemory = totalmem();
   const usedMemory = totalMemory - freemem();
+  const memoryPercent = Math.round((usedMemory / totalMemory) * 100);
   const diskRoot = platform() === "win32" ? parse(process.cwd()).root : "/";
   const disk = statfsSync(diskRoot, { bigint: true });
   const diskTotal = Number(disk.blocks * disk.bsize);
   const diskUsed = diskTotal - Number(disk.bavail * disk.bsize);
+  const diskPercent = Math.round((diskUsed / diskTotal) * 100);
   const failedUnits = run("systemctl", ["--failed", "--no-legend", "--plain"]).split("\n").filter(Boolean).length;
   const nginxOnline = serviceState("nginx");
   const postgresOnline = serviceState("postgresql");
@@ -204,9 +227,9 @@ export function getServerSnapshot(): ServerSnapshot {
   return {
     collectedAt: new Date().toISOString(),
     metrics: [
-      { label: "Zátěž CPU", value: `${loadPercent} %`, detail: `${cpuCount} vCPU · 1 min`, tone: "blue" },
-      { label: "Operační paměť", value: formatBytes(usedMemory), detail: `z ${formatBytes(totalMemory)}`, tone: "green" },
-      { label: "Kořenový disk", value: formatBytes(diskUsed), detail: `z ${formatBytes(diskTotal)}`, tone: "amber" },
+      { label: "Zátěž CPU", value: `${loadPercent} %`, detail: `${cpuCount} vCPU · živě`, tone: "blue", usagePercent: loadPercent },
+      { label: "Operační paměť", value: formatBytes(usedMemory), detail: `z ${formatBytes(totalMemory)}`, tone: "green", usagePercent: memoryPercent },
+      { label: "Kořenový disk", value: formatBytes(diskUsed), detail: `z ${formatBytes(diskTotal)}`, tone: "amber", usagePercent: diskPercent },
       { label: "Doba provozu", value: formatUptime(uptime()), detail: "od posledního startu", tone: "violet" },
     ],
     services: [

@@ -64,7 +64,7 @@ if [[ $ACTION == "enqueue" ]]; then
   job_line TITLE "$(job_title "$OPERATION" "${1:-}" "${2:-}")"
   if [[ $OPERATION == database-create ]]; then
     SECRET_FILE="$JOB_DIR/$JOB_ID.secret"
-    IFS= read -r PASSWORD
+    IFS= read -r PASSWORD || [[ -n $PASSWORD ]]
     install -o root -g root -m 0600 /dev/null "$SECRET_FILE"
     printf '%s' "$PASSWORD" > "$SECRET_FILE"
     unset PASSWORD
@@ -138,6 +138,13 @@ valid_port() {
 valid_database_name() {
   [[ $1 =~ ^[a-z][a-z0-9_]{0,62}$ ]]
 }
+
+if [[ $ACTION == "database-editor" ]]; then
+  DATABASE="$SUBJECT"
+  valid_database_name "$DATABASE" || { echo "Invalid database." >&2; exit 1; }
+  [[ -f $DATABASE_STATE_DIR/$DATABASE ]] || { echo "Database is not managed by the dashboard." >&2; exit 1; }
+  exec node /usr/local/lib/vps-dashboard/database-editor.mjs "${3:-}" "$DATABASE" "${@:4}"
+fi
 
 wedos_request() {
   local command="$1" data="$2" output="$3"
@@ -255,6 +262,114 @@ EOF
   fi
 }
 
+write_static_config() {
+  local DOMAIN="$SUBJECT"
+  local force_https="$1" www_redirect="$2"
+  valid_flag "$force_https" || exit 1
+  valid_flag "$www_redirect" || exit 1
+
+  local config="$NGINX_AVAILABLE/$DOMAIN"
+  step "Připravuji konfiguraci Nginx"
+  cat > "$config" <<EOF
+server {
+    listen 80;
+    listen [::]:80;
+    server_name $DOMAIN;
+    root /srv/apps/$DOMAIN;
+    index index.html;
+
+    location / {
+        try_files \$uri \$uri/ =404;
+    }
+}
+EOF
+
+  if [[ $www_redirect == "1" ]]; then
+    cat >> "$config" <<EOF
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name www.$DOMAIN;
+    return 301 http://$DOMAIN\$request_uri;
+}
+EOF
+  fi
+
+  ln -sfn "$config" "$NGINX_ENABLED/$DOMAIN"
+  rm -f "$NGINX_ENABLED/www.$DOMAIN"
+  step "Ověřuji a načítám konfiguraci Nginx"
+  nginx -t
+  systemctl reload nginx
+
+  if [[ ${3:-0} == "1" ]]; then
+    step "Vystavuji SSL certifikát"
+    local certbot_args=(--nginx --non-interactive --cert-name "$DOMAIN" -d "$DOMAIN")
+    [[ $www_redirect == "1" ]] && certbot_args+=(-d "www.$DOMAIN")
+    [[ $force_https == "1" ]] && certbot_args+=(--redirect) || certbot_args+=(--no-redirect)
+    certbot "${certbot_args[@]}"
+  fi
+}
+
+write_split_config() {
+  local DOMAIN="$SUBJECT"
+  local target="$1" force_https="$2" www_redirect="$3"
+  valid_target "$target" || { echo "Invalid upstream target." >&2; exit 1; }
+  valid_flag "$force_https" || exit 1
+  valid_flag "$www_redirect" || exit 1
+
+  local config="$NGINX_AVAILABLE/$DOMAIN"
+  step "Připravuji konfiguraci Nginx"
+  cat > "$config" <<EOF
+server {
+    listen 80;
+    listen [::]:80;
+    server_name $DOMAIN;
+    root /srv/apps/$DOMAIN/client/dist;
+    index index.html;
+
+    location /api/ {
+        proxy_pass http://$target;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+    }
+
+    location / {
+        try_files \$uri \$uri/ /index.html;
+    }
+}
+EOF
+
+  if [[ $www_redirect == "1" ]]; then
+    cat >> "$config" <<EOF
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name www.$DOMAIN;
+    return 301 http://$DOMAIN\$request_uri;
+}
+EOF
+  fi
+
+  ln -sfn "$config" "$NGINX_ENABLED/$DOMAIN"
+  rm -f "$NGINX_ENABLED/www.$DOMAIN"
+  step "Ověřuji a načítám konfiguraci Nginx"
+  nginx -t
+  systemctl reload nginx
+
+  if [[ ${4:-0} == "1" ]]; then
+    step "Vystavuji SSL certifikát"
+    local certbot_args=(--nginx --non-interactive --cert-name "$DOMAIN" -d "$DOMAIN")
+    [[ $www_redirect == "1" ]] && certbot_args+=(-d "www.$DOMAIN")
+    [[ $force_https == "1" ]] && certbot_args+=(--redirect) || certbot_args+=(--no-redirect)
+    certbot "${certbot_args[@]}"
+  fi
+}
+
 case "$ACTION" in
   upsert|domain-upsert)
     DOMAIN="$SUBJECT"
@@ -276,7 +391,7 @@ EOF
     fi
     step "Nastavuji A záznam ve WEDOS DNS"
     ensure_wedos_a_record "$DOMAIN"
-    write_proxy_config "${3:-}" "${4:-}" "${5:-}" "${6:-}"
+    write_static_config "${3:-}" "${4:-}" "${5:-}"
     rm -f "$APP_STATE_DIR/$DOMAIN"
     ;;
   deploy|domain-deploy)
@@ -301,20 +416,43 @@ EOF
     SERVICE_BACKUP="/tmp/$SERVICE_NAME.service.$$"
     NGINX_BACKUP="/tmp/$SERVICE_NAME.nginx.$$"
     trap 'rm -rf -- "$TEMP_DIR"' EXIT
-    if ss -ltnH "sport = :$PORT" | grep -q . && ! systemctl is-active --quiet "$SERVICE_NAME"; then
-      echo "Port $PORT is already in use." >&2
-      exit 1
+    if ! systemctl is-active --quiet "$SERVICE_NAME"; then
+      while ss -ltnH "sport = :$PORT" | grep -q .; do
+        ((PORT < 65535)) || { echo "No available application port was found." >&2; exit 1; }
+        PORT=$((PORT + 1))
+      done
     fi
 
     step "Klonuji repozitář $BRANCH"
     mkdir -p /srv/apps "$TEMP_DIR"
     chown www-data:www-data "$TEMP_DIR"
     runuser -u www-data -- git clone --branch "$BRANCH" --single-branch -- "$SSH_REPOSITORY" "$TEMP_DIR"
-    [[ -f $TEMP_DIR/package-lock.json ]] || { echo "package-lock.json is required." >&2; exit 1; }
-    step "Instaluji závislosti"
-    runuser -u www-data -- env HOME="$TEMP_DIR" npm_config_cache="$TEMP_DIR/.npm" npm --prefix "$TEMP_DIR" ci
-    step "Sestavuji aplikaci"
-    runuser -u www-data -- env HOME="$TEMP_DIR" npm_config_cache="$TEMP_DIR/.npm" npm --prefix "$TEMP_DIR" run build
+    APP_MODE=""
+    if [[ -s $TEMP_DIR/package.json && -s $TEMP_DIR/package-lock.json ]]; then
+      APP_MODE="root"
+      step "Instaluji závislosti"
+      runuser -u www-data -- env HOME="$TEMP_DIR" npm_config_cache="$TEMP_DIR/.npm" npm --prefix "$TEMP_DIR" ci
+      step "Sestavuji aplikaci"
+      runuser -u www-data -- env HOME="$TEMP_DIR" npm_config_cache="$TEMP_DIR/.npm" npm --prefix "$TEMP_DIR" run build
+    elif [[ -s $TEMP_DIR/client/package.json && -s $TEMP_DIR/client/package-lock.json && -s $TEMP_DIR/server/package.json && -s $TEMP_DIR/server/package-lock.json ]]; then
+      APP_MODE="split"
+      step "Instaluji závislosti klienta"
+      runuser -u www-data -- env HOME="$TEMP_DIR" npm_config_cache="$TEMP_DIR/.npm" npm --prefix "$TEMP_DIR/client" ci
+      step "Sestavuji klienta"
+      runuser -u www-data -- env HOME="$TEMP_DIR" npm_config_cache="$TEMP_DIR/.npm" npm --prefix "$TEMP_DIR/client" run build
+      [[ -f $TEMP_DIR/client/dist/index.html ]] || { echo "Client build did not create client/dist/index.html." >&2; exit 1; }
+      step "Instaluji závislosti serveru"
+      runuser -u www-data -- env HOME="$TEMP_DIR" npm_config_cache="$TEMP_DIR/.npm" npm --prefix "$TEMP_DIR/server" ci --omit=dev
+      SERVER_ENTRY="$TEMP_DIR/server/src/index.js"
+      [[ -f $SERVER_ENTRY ]] || { echo "server/src/index.js is required for split applications." >&2; exit 1; }
+      if ! grep -q 'process\.env\.PORT' "$SERVER_ENTRY"; then
+        node -e 'const fs=require("fs"),p=process.argv[1];let s=fs.readFileSync(p,"utf8");const n=s.replace(/\b(const|let|var)\s+PORT\s*=\s*([0-9]+)\s*;/,`const PORT = Number(process.env.PORT || $2);`);if(n===s)process.exit(1);fs.writeFileSync(p,n)' "$SERVER_ENTRY" || { echo "Split server must use process.env.PORT or declare a numeric PORT constant." >&2; exit 1; }
+        chown www-data:www-data "$SERVER_ENTRY"
+      fi
+    else
+      echo "Repository must contain package.json and package-lock.json in its root, or in both client/ and server/." >&2
+      exit 1
+    fi
     step "Nastavuji A záznam ve WEDOS DNS"
     ensure_wedos_a_record "$DOMAIN"
     BACKUP_DIR=""
@@ -344,6 +482,13 @@ EOF
     trap rollback_deploy ERR
 
     step "Aktivuji systemd službu"
+    if [[ $APP_MODE == "split" ]]; then
+      SERVICE_WORKING_DIRECTORY="$APP_DIR/server"
+      SERVICE_EXEC_START="$(command -v npm) start"
+    else
+      SERVICE_WORKING_DIRECTORY="$APP_DIR"
+      SERVICE_EXEC_START="$(command -v npm) start -- --port $PORT"
+    fi
     cat > "$SERVICE_FILE" <<EOF
 [Unit]
 Description=Web application for $DOMAIN
@@ -352,10 +497,10 @@ After=network.target
 [Service]
 Type=simple
 User=www-data
-WorkingDirectory=$APP_DIR
+WorkingDirectory=$SERVICE_WORKING_DIRECTORY
 Environment=NODE_ENV=production
 Environment=PORT=$PORT
-ExecStart=$(command -v npm) start -- --port $PORT
+ExecStart=$SERVICE_EXEC_START
 Restart=always
 RestartSec=5
 
@@ -365,11 +510,15 @@ EOF
     systemctl daemon-reload
     systemctl enable --now "$SERVICE_NAME"
     for _ in {1..15}; do
-      curl --fail --silent "http://127.0.0.1:$PORT/" >/dev/null && break
+      ss -ltnH "sport = :$PORT" | grep -q . && break
       sleep 1
     done
-    curl --fail --silent "http://127.0.0.1:$PORT/" >/dev/null
-    write_proxy_config "127.0.0.1:$PORT" "$FORCE_HTTPS" "$WWW_REDIRECT" "$AUTOMATIC_SSL"
+    ss -ltnH "sport = :$PORT" | grep -q .
+    if [[ $APP_MODE == "split" ]]; then
+      write_split_config "127.0.0.1:$PORT" "$FORCE_HTTPS" "$WWW_REDIRECT" "$AUTOMATIC_SSL"
+    else
+      write_proxy_config "127.0.0.1:$PORT" "$FORCE_HTTPS" "$WWW_REDIRECT" "$AUTOMATIC_SSL"
+    fi
     install -d -o root -g www-data -m 0750 "$APP_STATE_DIR"
     printf '%s\t%s\t%s\n' "$REPOSITORY" "$BRANCH" "$PORT" > "$APP_STATE_DIR/$DOMAIN"
     chown root:www-data "$APP_STATE_DIR/$DOMAIN"
@@ -457,13 +606,13 @@ EOF
     ! runuser -u postgres -- psql --dbname postgres --tuples-only --no-align --command="SELECT 1 FROM pg_database WHERE datname = '$DATABASE'" | grep -q 1 || { echo "Database already exists." >&2; exit 1; }
     ROLE_EXISTED="$(runuser -u postgres -- psql --dbname postgres --tuples-only --no-align --command="SELECT 1 FROM pg_roles WHERE rolname = '$OWNER'")"
     SQL_FILE="$(mktemp)"
+    printf '%s\n' "SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', '$OWNER', :'password') WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '$OWNER') \\gexec" > "$SQL_FILE"
+    chown postgres:postgres "$SQL_FILE"
     chmod 0600 "$SQL_FILE"
-    PASSWORD_LITERAL="$(DB_PASSWORD="$PASSWORD" node -e 'process.stdout.write("'"'"'"+process.env.DB_PASSWORD.replaceAll("'"'"'","'"'"''"'"'")+"'"'"'")')"
-    printf '%s\n' "SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', '$OWNER', $PASSWORD_LITERAL) WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '$OWNER') \\gexec" > "$SQL_FILE"
-    unset PASSWORD PASSWORD_LITERAL
     trap 'rm -f "$SQL_FILE"; [[ -n $ROLE_EXISTED ]] || runuser -u postgres -- dropuser --if-exists -- "$OWNER" 2>/dev/null || true' ERR
     step "Vytvářím databázového uživatele"
-    runuser -u postgres -- psql --dbname postgres --set=ON_ERROR_STOP=1 --file="$SQL_FILE"
+    runuser -u postgres -- psql --dbname postgres --set=ON_ERROR_STOP=1 --set=password="$PASSWORD" --file="$SQL_FILE"
+    unset PASSWORD
     rm -f "$SQL_FILE"
     step "Vytvářím PostgreSQL databázi"
     runuser -u postgres -- createdb --owner="$OWNER" --encoding=UTF8 -- "$DATABASE"

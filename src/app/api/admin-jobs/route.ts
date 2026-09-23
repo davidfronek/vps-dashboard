@@ -6,7 +6,6 @@ import type { AdminJobRequest, AdminOperation } from "@/lib/admin-job-types";
 
 const HELPER = "/usr/local/sbin/vps-dashboard-domains";
 const DOMAIN = /^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?$/;
-const TARGET = /^(?:127\.0\.0\.1|localhost|\[::1\]):[0-9]{4,5}$/;
 const REPOSITORY = /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?$/;
 const BRANCH = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 const USERNAME = /^[a-z_][a-z0-9_-]{0,30}$/;
@@ -33,7 +32,7 @@ function validRequest(value: unknown): value is AdminJobRequest {
   const [subject, ...args] = request.arguments;
   if (request.operation.startsWith("domain-")) {
     if (!subject || !DOMAIN.test(subject) || !subject.includes(".") || subject.includes("..")) return false;
-    if (request.operation === "domain-upsert") return args.length === 4 && TARGET.test(args[0]) && args.slice(1).every(validFlag);
+    if (request.operation === "domain-upsert") return args.length === 3 && args.every(validFlag);
     if (request.operation === "domain-deploy") return args.length === 6 && REPOSITORY.test(args[0]) && BRANCH.test(args[1]) && validPort(args[2]) && args.slice(3).every(validFlag);
     return args.length === 0;
   }
@@ -44,7 +43,7 @@ function validRequest(value: unknown): value is AdminJobRequest {
     return args.length === 0;
   }
   if (!subject || !DATABASE_NAME.test(subject)) return false;
-  if (request.operation === "database-create") return args.length === 2 && DATABASE_NAME.test(args[0]) && args[1].length >= 12 && args[1].length <= 128;
+  if (request.operation === "database-create") return args.length === 3 && DATABASE_NAME.test(args[0]) && DATABASE_NAME.test(args[1]) && args[2].length >= 12 && args[2].length <= 128;
   return request.operation === "database-delete" && args.length === 0;
 }
 

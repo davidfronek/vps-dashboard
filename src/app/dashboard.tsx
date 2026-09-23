@@ -6,7 +6,7 @@ import {
   LogOut, RefreshCw, Search, Server, Settings, ShieldCheck, TerminalSquare, Trash2, Users, X, Zap,
   type LucideIcon,
 } from "lucide-react";
-import { FormEvent, useRef, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import DatabaseView from "./database-view";
 import UsersView from "./users-view";
@@ -52,6 +52,13 @@ function groupDomains(domains: Domain[]): DomainGroup[] {
       deployment: entries.find((domain) => domain.deployment)?.deployment,
     };
   });
+}
+
+function getAvailableDeploymentPort(domains: Domain[]) {
+  const usedPorts = new Set(domains.flatMap((domain) => domain.deployment ? [domain.deployment.port] : []));
+  let port = 3001;
+  while (usedPorts.has(port) && port < 65535) port += 1;
+  return port;
 }
 
 const navigation: { label: string; icon: LucideIcon; badge?: boolean }[] = [
@@ -141,8 +148,9 @@ function SettingsView({ notify }: { notify: (message: string) => void }) {
   </>;
 }
 
-export default function Dashboard({ adminUsername, snapshot }: { adminUsername: string; snapshot: ServerSnapshot }) {
+export default function Dashboard({ adminUsername, snapshot: initialSnapshot }: { adminUsername: string; snapshot: ServerSnapshot }) {
   const router = useRouter();
+  const [snapshot, setSnapshot] = useState(initialSnapshot);
   const [activeSection, setActiveSection] = useState("Přehled");
   const domains: Domain[] = snapshot.domains;
   const [query, setQuery] = useState("");
@@ -151,7 +159,7 @@ export default function Dashboard({ adminUsername, snapshot }: { adminUsername: 
   const [githubDeploy, setGithubDeploy] = useState(false);
   const [githubRepository, setGithubRepository] = useState("");
   const [githubBranch, setGithubBranch] = useState("main");
-  const [deploymentPort, setDeploymentPort] = useState(3001);
+  const [deploymentPort, setDeploymentPort] = useState(() => getAvailableDeploymentPort(initialSnapshot.domains));
   const [domainToDelete, setDomainToDelete] = useState<string | null>(null);
   const [domainSettings, setDomainSettings] = useState<DomainSettings | null>(null);
   const [editGithubDeploy, setEditGithubDeploy] = useState(false);
@@ -166,6 +174,25 @@ export default function Dashboard({ adminUsername, snapshot }: { adminUsername: 
   const groupedDomains = groupDomains(domains);
   const filteredDomains = groupedDomains.filter((domain) => domain.names.some((name) => name.toLowerCase().includes(query.toLowerCase())));
   const domainForDeletion = groupedDomains.find((domain) => domain.key === domainToDelete);
+
+  useEffect(() => {
+    let active = true;
+    async function refreshSnapshot() {
+      if (document.visibilityState === "hidden") return;
+      try {
+        const response = await fetch("/api/server-snapshot", { cache: "no-store" });
+        if (!response.ok) return;
+        const nextSnapshot = await response.json() as ServerSnapshot;
+        if (active) setSnapshot(nextSnapshot);
+      } catch {}
+    }
+    const interval = window.setInterval(refreshSnapshot, 2_000);
+    void refreshSnapshot();
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, []);
 
   function notify(message: string) {
     setToast(message);
@@ -196,6 +223,11 @@ export default function Dashboard({ adminUsername, snapshot }: { adminUsername: 
     setEditDeploymentPort(domain.deployment?.port ?? 3001);
   }
 
+  function openNewDomain() {
+    setDeploymentPort(getAvailableDeploymentPort(domains));
+    setModalOpen(true);
+  }
+
   async function addDomain(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const name = String(new FormData(event.currentTarget).get("domain") ?? "").trim();
@@ -205,7 +237,7 @@ export default function Dashboard({ adminUsername, snapshot }: { adminUsername: 
       operation: githubDeploy ? "domain-deploy" : "domain-upsert",
       arguments: githubDeploy
         ? [name, githubRepository, githubBranch, String(deploymentPort), "1", wwwRedirect, "1"]
-        : [name, "127.0.0.1:3000", "1", wwwRedirect, "1"],
+        : [name, "1", wwwRedirect, "1"],
     });
     if (succeeded) {
       setModalOpen(false);
@@ -213,20 +245,19 @@ export default function Dashboard({ adminUsername, snapshot }: { adminUsername: 
       setGithubDeploy(false);
       setGithubRepository("");
       setGithubBranch("main");
-      setDeploymentPort(3001);
+      setDeploymentPort(getAvailableDeploymentPort(domains));
     }
   }
 
   async function saveDomainSettings(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!domainSettings) return;
-    const target = String(new FormData(event.currentTarget).get("target") ?? "").trim();
     const flags = [domainSettings.forceHttps ? "1" : "0", domainSettings.wwwRedirect ? "1" : "0", domainSettings.automaticSsl ? "1" : "0"];
     const succeeded = await executeJob(editGithubDeploy ? `Nasazení aplikace ${domainSettings.name}` : `Konfigurace domény ${domainSettings.name}`, {
       operation: editGithubDeploy ? "domain-deploy" : "domain-upsert",
       arguments: editGithubDeploy
         ? [domainSettings.name, editGithubRepository, editGithubBranch, String(editDeploymentPort), ...flags]
-        : [domainSettings.name, target, ...flags],
+        : [domainSettings.name, ...flags],
     });
     if (succeeded) setDomainSettings(null);
   }
@@ -258,8 +289,8 @@ export default function Dashboard({ adminUsername, snapshot }: { adminUsername: 
         <header className="topbar"><button className="icon-button menu-button" onClick={() => setMenuOpen(true)} aria-label="Otevřít navigaci"><Menu size={20} /></button><div className="breadcrumbs"><span>Servery</span><b>/</b><strong>Onremote.cz</strong></div><div className="top-actions"><button className="icon-button" aria-label="Oznámení" title="Oznámení"><Bell size={19} /><i /></button><button className="terminal-button" onClick={() => notify("SSH: root@46.28.108.112")}><TerminalSquare size={17} /> Terminál</button></div></header>
         <div className="page-content">
           {activeSection === "Nastavení" ? <SettingsView notify={notify} /> : activeSection === "Databáze" ? <DatabaseView databases={snapshot.databases} onRefresh={() => router.refresh()} runJob={executeJob} /> : activeSection === "Uživatelé" ? <UsersView users={snapshot.users} onRefresh={() => router.refresh()} runJob={executeJob} /> : <>
-          <section className="page-heading"><div><div className={snapshot.services.every((service) => service.state !== "Nedostupné") ? "eyebrow neutral" : "eyebrow issue"}><span className={snapshot.services.every((service) => service.state !== "Nedostupné") ? "status-dot" : "status-dot issue"} /> {snapshot.services.every((service) => service.state !== "Nedostupné") ? "Všechny sledované služby jsou dostupné" : "Některá služba vyžaduje pozornost"}</div><h1>Onremote.cz</h1><p>Živý stav z {new Date(snapshot.collectedAt).toLocaleString("cs-CZ")}.</p></div><div className="heading-actions"><button className="secondary-button" onClick={() => router.refresh()}><RefreshCw size={17} /> Obnovit</button><button className="primary-button" onClick={() => setModalOpen(true)}><Plus size={17} /> Přidat doménu</button></div></section>
-          <section className="metrics-grid" aria-label="Využití serveru">{snapshot.metrics.map(({ label, value, detail, tone }, index) => { const Icon = metricIcons[index]; return <article className="metric-card" key={label}><span className={`metric-icon ${tone}`}><Icon size={19} /></span><div><span>{label}</span><strong>{value}</strong><small>{detail}</small></div></article>; })}</section>
+          <section className="page-heading"><div><div className={snapshot.services.every((service) => service.state !== "Nedostupné") ? "eyebrow neutral" : "eyebrow issue"}><span className={snapshot.services.every((service) => service.state !== "Nedostupné") ? "status-dot" : "status-dot issue"} /> {snapshot.services.every((service) => service.state !== "Nedostupné") ? "Všechny sledované služby jsou dostupné" : "Některá služba vyžaduje pozornost"}</div><h1>Onremote.cz</h1><p>Živý stav z {new Date(snapshot.collectedAt).toLocaleString("cs-CZ")}.</p></div><div className="heading-actions"><button className="secondary-button" onClick={() => router.refresh()}><RefreshCw size={17} /> Obnovit</button><button className="primary-button" onClick={openNewDomain}><Plus size={17} /> Přidat doménu</button></div></section>
+          <section className="metrics-grid" aria-label="Využití serveru">{snapshot.metrics.map(({ label, value, detail, tone, usagePercent }, index) => { const Icon = metricIcons[index]; const circumference = 2 * Math.PI * 30; const utilizationTone = usagePercent === undefined ? "" : usagePercent <= 30 ? "low" : usagePercent <= 75 ? "medium" : "high"; return <article className="metric-card" key={label}><span className={`metric-icon ${tone}`}><Icon size={19} /></span><div><span>{label}</span><strong>{value}</strong><small>{detail}</small></div>{usagePercent !== undefined && <div className={`utilization-chart ${utilizationTone}`} role="img" aria-label={`${label}: ${usagePercent} %`}><svg viewBox="0 0 72 72" aria-hidden="true"><circle className="utilization-track" cx="36" cy="36" r="30" /><circle className="utilization-value" cx="36" cy="36" r="30" strokeDasharray={circumference} strokeDashoffset={circumference * (1 - usagePercent / 100)} /></svg><span>{usagePercent}<small>%</small></span></div>}</article>; })}</section>
 
           <div className="overview-grid">
             <section className="panel performance-panel">
@@ -273,7 +304,7 @@ export default function Dashboard({ adminUsername, snapshot }: { adminUsername: 
 
           <section className="panel management-panel">
             <div className="panel-header management-header"><div><h2>Správa serveru</h2><p>Domény, DNS a rychlé systémové akce</p></div><div className="quick-actions"><button onClick={() => notify("Záloha byla naplánována")}><Database size={16} /> Vytvořit zálohu</button><button onClick={() => notify("Restart serveru byl naplánován")}><Power size={16} /> Restartovat</button></div></div>
-            <div className="domain-toolbar"><div className="search-field"><Search size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Hledat doménu..." aria-label="Hledat doménu" /></div><button className="add-domain-compact" onClick={() => setModalOpen(true)}><Plus size={16} /> Nová doména</button></div>
+            <div className="domain-toolbar"><div className="search-field"><Search size={17} /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Hledat doménu..." aria-label="Hledat doménu" /></div><button className="add-domain-compact" onClick={openNewDomain}><Plus size={16} /> Nová doména</button></div>
             <div className="domain-table-wrap"><table className="domain-table"><thead><tr><th>Doména</th><th>Cíl</th><th>SSL certifikát</th><th>Stav</th><th><span className="sr-only">Akce</span></th></tr></thead><tbody>{filteredDomains.map((domain) => <tr key={domain.key}><td><span className="domain-favicon"><Globe2 size={15} /></span><span className="domain-name"><strong>{domain.name}</strong>{domain.names.length > 1 && <small>včetně {domain.names.filter((name) => name !== domain.name).join(", ")}</small>}{domain.deployment && <small className="deployment-source"><GitBranch size={10} /> {domain.deployment.repository.replace(/^https:\/\/github\.com\//, "").replace(/\.git$/, "")} · {domain.deployment.branch}</small>}</span></td><td className="mono">{domain.target}</td><td><span className={domain.ssl === "Aktivní" ? "table-status success" : "table-status pending"}><ShieldCheck size={14} /> {domain.ssl}</span></td><td><span className={domain.status === "Online" ? "table-status success" : "table-status pending"}><i /> {domain.status}</span></td><td><span className="row-actions"><button className="row-action" onClick={() => openDomainSettings(domain)} aria-label={`Nastavení domény ${domain.name}`} title="Nastavení"><Ellipsis size={18} /></button><button className="row-action delete" disabled={domain.key === "onremote.cz"} onClick={() => setDomainToDelete(domain.key)} aria-label={domain.key === "onremote.cz" ? "Správcovskou doménu nelze odebrat" : `Odebrat doménu ${domain.name}`} title={domain.key === "onremote.cz" ? "Správcovská doména je chráněná" : "Odebrat doménu"}><Trash2 size={16} /></button></span></td></tr>)}</tbody></table>{filteredDomains.length === 0 && <div className="empty-state">Žádná doména neodpovídá hledání.</div>}</div>
           </section>
           </>}
