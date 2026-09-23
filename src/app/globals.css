@@ -128,7 +128,7 @@ footer { display: flex; justify-content: space-between; padding: 21px 3px 0; col
 .settings-fields > label > span:first-child, .setting-row strong, .key-card strong { color: #303030; }
 .terminal-button, .toast { background: #303030; border-color: #303030; }
 .online-pill, .secure-badge { color: #555b57; background: #eceeeb; }
-.eyebrow.issue { color: #5f5555; }.status-dot.issue { background: #756666; box-shadow: 0 0 0 3px #ece7e7; }
+.eyebrow.issue { color: #5f5555; }.status-dot.success { background: #16a36a; box-shadow: 0 0 0 3px #dff3e9; }.status-dot.issue { background: #756666; box-shadow: 0 0 0 3px #ece7e7; }
 .details-link { color: #454545; }
 .domain-toolbar, .settings-save { background: #f7f7f5; }
 .domain-favicon, .modal-icon { color: #555; background: #ededeb; }
