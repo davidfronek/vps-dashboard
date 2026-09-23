@@ -37,6 +37,8 @@ APP_DIR="/srv/apps/$DOMAIN"
 SERVICE_NAME="vps-app-$APP_SLUG"
 NGINX_CONFIG="/etc/nginx/sites-available/$DOMAIN"
 NPM_BIN="$(command -v npm)"
+SSH_REPOSITORY="git@github.com:${REPOSITORY#https://github.com/}"
+[[ $SSH_REPOSITORY == *.git ]] || SSH_REPOSITORY="${SSH_REPOSITORY}.git"
 
 mkdir -p /srv/apps
 if [[ -d "$APP_DIR/.git" ]]; then
@@ -45,7 +47,7 @@ if [[ -d "$APP_DIR/.git" ]]; then
   git -C "$APP_DIR" checkout -B "$BRANCH" "origin/$BRANCH"
 else
   rm -rf "$APP_DIR"
-  git clone --branch "$BRANCH" --single-branch -- "$REPOSITORY" "$APP_DIR"
+  git clone --branch "$BRANCH" --single-branch -- "$SSH_REPOSITORY" "$APP_DIR"
 fi
 
 cd "$APP_DIR"

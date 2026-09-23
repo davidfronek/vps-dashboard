@@ -292,6 +292,8 @@ EOF
     [[ $BRANCH =~ ^[A-Za-z0-9][A-Za-z0-9._/-]*$ ]] || { echo "Invalid branch." >&2; exit 1; }
     [[ $PORT =~ ^[0-9]+$ ]] && ((PORT >= 1024 && PORT <= 65535)) || { echo "Invalid port." >&2; exit 1; }
     valid_flag "$FORCE_HTTPS" && valid_flag "$WWW_REDIRECT" && valid_flag "$AUTOMATIC_SSL" || exit 1
+    SSH_REPOSITORY="git@github.com:${REPOSITORY#https://github.com/}"
+    [[ $SSH_REPOSITORY == *.git ]] || SSH_REPOSITORY="${SSH_REPOSITORY}.git"
     APP_DIR="/srv/apps/$DOMAIN"
     SERVICE_NAME="vps-app-${DOMAIN//./-}"
     TEMP_DIR="/srv/apps/.${DOMAIN}.deploy.$$"
@@ -307,7 +309,7 @@ EOF
     step "Klonuji repozitář $BRANCH"
     mkdir -p /srv/apps "$TEMP_DIR"
     chown www-data:www-data "$TEMP_DIR"
-    runuser -u www-data -- git clone --branch "$BRANCH" --single-branch -- "$REPOSITORY" "$TEMP_DIR"
+    runuser -u www-data -- git clone --branch "$BRANCH" --single-branch -- "$SSH_REPOSITORY" "$TEMP_DIR"
     [[ -f $TEMP_DIR/package-lock.json ]] || { echo "package-lock.json is required." >&2; exit 1; }
     step "Instaluji závislosti"
     runuser -u www-data -- env HOME="$TEMP_DIR" npm_config_cache="$TEMP_DIR/.npm" npm --prefix "$TEMP_DIR" ci
