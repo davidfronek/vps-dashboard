@@ -42,6 +42,8 @@ ENV_FILE="/var/lib/vps-dashboard/apps/$DOMAIN.env"
 NPM_BIN="$(command -v npm)"
 SSH_REPOSITORY="git@github.com:${REPOSITORY#https://github.com/}"
 [[ $SSH_REPOSITORY == *.git ]] || SSH_REPOSITORY="${SSH_REPOSITORY}.git"
+WWW_HOME="$(getent passwd www-data | cut -d: -f6)"
+ACCOUNT_KEY="$WWW_HOME/.ssh/github_account_ed25519"
 
 mkdir -p /srv/apps
 if [[ -d "$APP_DIR/.git" ]]; then
@@ -50,7 +52,12 @@ if [[ -d "$APP_DIR/.git" ]]; then
   git -C "$APP_DIR" checkout -B "$BRANCH" "origin/$BRANCH"
 else
   rm -rf "$APP_DIR"
-  git clone --branch "$BRANCH" --single-branch -- "$SSH_REPOSITORY" "$APP_DIR"
+  if [[ -f $ACCOUNT_KEY ]] && ! runuser -u www-data -- env GIT_SSH_COMMAND="ssh -i $ACCOUNT_KEY -o IdentitiesOnly=yes" git clone --branch "$BRANCH" --single-branch -- "$SSH_REPOSITORY" "$APP_DIR"; then
+    rm -rf "$APP_DIR"
+    runuser -u www-data -- git clone --branch "$BRANCH" --single-branch -- "$SSH_REPOSITORY" "$APP_DIR"
+  elif [[ ! -f $ACCOUNT_KEY ]]; then
+    runuser -u www-data -- git clone --branch "$BRANCH" --single-branch -- "$SSH_REPOSITORY" "$APP_DIR"
+  fi
 fi
 
 cd "$APP_DIR"

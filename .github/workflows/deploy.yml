@@ -32,7 +32,10 @@ jobs:
           if [[ ! -f "$WWW_HOME/.ssh/id_ed25519" ]]; then
             runuser -u www-data -- ssh-keygen -q -t ed25519 -N "" -C "vps-dashboard-deploy" -f "$WWW_HOME/.ssh/id_ed25519"
           fi
-          echo "GitHub deploy key: $(cat "$WWW_HOME/.ssh/id_ed25519.pub")"
+          if [[ ! -f "$WWW_HOME/.ssh/github_account_ed25519" ]]; then
+            runuser -u www-data -- ssh-keygen -q -t ed25519 -N "" -C "vps-dashboard-account" -f "$WWW_HOME/.ssh/github_account_ed25519"
+          fi
+          echo "GitHub account key: $(cat "$WWW_HOME/.ssh/github_account_ed25519.pub")"
 
           HELPER_SOURCE="$(mktemp)"
           trap 'rm -f "$HELPER_SOURCE"' EXIT

@@ -460,7 +460,15 @@ EOF
     step "Klonuji repozitář $BRANCH"
     mkdir -p /srv/apps "$TEMP_DIR"
     chown www-data:www-data "$TEMP_DIR"
-    runuser -u www-data -- git clone --branch "$BRANCH" --single-branch -- "$SSH_REPOSITORY" "$TEMP_DIR"
+    WWW_HOME="$(getent passwd www-data | cut -d: -f6)"
+    ACCOUNT_KEY="$WWW_HOME/.ssh/github_account_ed25519"
+    if [[ -f $ACCOUNT_KEY ]] && ! runuser -u www-data -- env GIT_SSH_COMMAND="ssh -i $ACCOUNT_KEY -o IdentitiesOnly=yes" git clone --branch "$BRANCH" --single-branch -- "$SSH_REPOSITORY" "$TEMP_DIR"; then
+      rm -rf -- "$TEMP_DIR"
+      install -d -o www-data -g www-data -m 0750 "$TEMP_DIR"
+      runuser -u www-data -- git clone --branch "$BRANCH" --single-branch -- "$SSH_REPOSITORY" "$TEMP_DIR"
+    elif [[ ! -f $ACCOUNT_KEY ]]; then
+      runuser -u www-data -- git clone --branch "$BRANCH" --single-branch -- "$SSH_REPOSITORY" "$TEMP_DIR"
+    fi
     APP_MODE=""
     if [[ -s $TEMP_DIR/package.json && -s $TEMP_DIR/package-lock.json ]]; then
       APP_MODE="root"
