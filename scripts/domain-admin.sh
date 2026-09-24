@@ -80,8 +80,7 @@ NODE
   install -o root -g www-data -m 0640 "$TEMP_FILE" "$ENV_FILE"
   rm -f "$TEMP_FILE"
   trap - EXIT
-  systemctl restart "vps-app-${DOMAIN//./-}"
-  systemctl is-active --quiet "vps-app-${DOMAIN//./-}"
+  systemd-run --quiet --collect --on-active=2s systemctl restart "vps-app-${DOMAIN//./-}"
   exit
 fi
 
