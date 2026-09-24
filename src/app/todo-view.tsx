@@ -9,7 +9,7 @@ const priorityLabels: Record<TodoPriority, string> = { high: "Vysoká", medium: 
 type TodoDraft = { title: string; description: string; priority: TodoPriority };
 const emptyDraft: TodoDraft = { title: "", description: "", priority: "medium" };
 
-export default function TodoView({ notify }: { notify: (message: string) => void }) {
+export default function TodoView({ notify, onActiveCountChange }: { notify: (message: string) => void; onActiveCountChange: (count: number) => void }) {
   const [todos, setTodos] = useState<TodoItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -24,7 +24,9 @@ export default function TodoView({ notify }: { notify: (message: string) => void
       const response = await fetch("/api/todos", { cache: "no-store" });
       const result = await response.json().catch(() => null) as { todos?: TodoItem[]; message?: string } | null;
       if (!response.ok) throw new Error(result?.message ?? "Úkoly se nepodařilo načíst.");
-      setTodos(result?.todos ?? []);
+      const nextTodos = result?.todos ?? [];
+      setTodos(nextTodos);
+      onActiveCountChange(nextTodos.filter((todo) => !todo.completed).length);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Spojení se serverem selhalo.");
     } finally {
@@ -38,14 +40,18 @@ export default function TodoView({ notify }: { notify: (message: string) => void
       .then(async (response) => {
         const result = await response.json().catch(() => null) as { todos?: TodoItem[]; message?: string } | null;
         if (!response.ok) throw new Error(result?.message ?? "Úkoly se nepodařilo načíst.");
-        if (active) setTodos(result?.todos ?? []);
+        if (active) {
+          const nextTodos = result?.todos ?? [];
+          setTodos(nextTodos);
+          onActiveCountChange(nextTodos.filter((todo) => !todo.completed).length);
+        }
       })
       .catch((loadError: unknown) => {
         if (active) setError(loadError instanceof Error ? loadError.message : "Spojení se serverem selhalo.");
       })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, []);
+  }, [onActiveCountChange]);
 
   async function mutate(method: "POST" | "PATCH" | "DELETE", body: object) {
     setBusy(true);

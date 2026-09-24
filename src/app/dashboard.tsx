@@ -16,6 +16,7 @@ import AdminJobProgress, { runAdminJob } from "./admin-job-progress";
 import { logout } from "./auth-actions";
 import type { AdminJob } from "@/lib/admin-job-types";
 import type { ServerSnapshot } from "@/lib/server-data";
+import type { TodoItem } from "@/lib/todo-types";
 
 type Domain = Omit<ServerSnapshot["domains"][number], "ssl" | "status"> & {
   name: string;
@@ -171,6 +172,7 @@ export default function Dashboard({ adminUsername, snapshot: initialSnapshot }: 
   const [menuOpen, setMenuOpen] = useState(false);
   const [toast, setToast] = useState("");
   const [adminJob, setAdminJob] = useState<AdminJob | null>(null);
+  const [activeTodoCount, setActiveTodoCount] = useState<number | null>(null);
   const jobRunning = useRef(false);
   const pendingOperation = adminJob?.status === "queued" || adminJob?.status === "running";
   const groupedDomains = groupDomains(domains);
@@ -194,6 +196,18 @@ export default function Dashboard({ adminUsername, snapshot: initialSnapshot }: 
       active = false;
       window.clearInterval(interval);
     };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    fetch("/api/todos", { cache: "no-store" })
+      .then(async (response) => {
+        if (!response.ok) return;
+        const result = await response.json() as { todos?: TodoItem[] };
+        if (active) setActiveTodoCount((result.todos ?? []).filter((todo) => !todo.completed).length);
+      })
+      .catch(() => {});
+    return () => { active = false; };
   }, []);
 
   function notify(message: string) {
@@ -281,7 +295,7 @@ export default function Dashboard({ adminUsername, snapshot: initialSnapshot }: 
         <div className="brand"><span className="brand-mark"><Cloud size={20} /></span><span>Správa <span>VPS</span></span><button className="mobile-close" onClick={() => setMenuOpen(false)} aria-label="Zavřít navigaci"><X size={20} /></button></div>
         <div className="server-switcher"><span className="server-icon"><Server size={18} /></span><span><strong>Onremote.cz</strong><small>Debian VPS · KVM</small></span><ChevronDown size={16} /></div>
         <nav aria-label="Hlavní navigace"><p className="nav-label">Správa serveru</p>
-          {navigation.map(({ label, icon: Icon, badge }) => <button className={activeSection === label ? "nav-item active" : "nav-item"} key={label} onClick={() => { setActiveSection(label); setMenuOpen(false); if (!['Přehled', 'Úkoly', 'Databáze', 'Uživatelé', 'Nastavení'].includes(label)) notify(`Sekce ${label} je připravena`); }}><Icon size={18} /><span>{label}</span>{badge && <small>{groupedDomains.length}</small>}</button>)}
+          {navigation.map(({ label, icon: Icon, badge }) => <button className={activeSection === label ? "nav-item active" : "nav-item"} key={label} onClick={() => { setActiveSection(label); setMenuOpen(false); if (!['Přehled', 'Úkoly', 'Databáze', 'Uživatelé', 'Nastavení'].includes(label)) notify(`Sekce ${label} je připravena`); }}><Icon size={18} /><span>{label}</span>{badge && <small>{groupedDomains.length}</small>}{label === "Úkoly" && activeTodoCount !== null && <small>{activeTodoCount}</small>}</button>)}
         </nav>
         <div className="profile"><span className="avatar">{adminUsername.slice(0, 2).toUpperCase()}</span><span><strong>{adminUsername}</strong><small>Administrátor</small></span><form action={logout}><button type="submit" aria-label="Odhlásit se" title="Odhlásit se"><LogOut size={17} /></button></form></div>
       </aside>
@@ -290,7 +304,7 @@ export default function Dashboard({ adminUsername, snapshot: initialSnapshot }: 
       <main className="workspace">
         <header className="topbar"><button className="icon-button menu-button" onClick={() => setMenuOpen(true)} aria-label="Otevřít navigaci"><Menu size={20} /></button><div className="breadcrumbs"><span>Servery</span><b>/</b><strong>Onremote.cz</strong></div><div className="top-actions"><button className="icon-button" aria-label="Oznámení" title="Oznámení"><Bell size={19} /><i /></button><button className="terminal-button" onClick={() => notify("SSH: root@46.28.108.112")}><TerminalSquare size={17} /> Terminál</button></div></header>
         <div className="page-content">
-          {activeSection === "Nastavení" ? <SettingsView notify={notify} /> : activeSection === "Úkoly" ? <TodoView notify={notify} /> : activeSection === "Databáze" ? <DatabaseView databases={snapshot.databases} onRefresh={() => router.refresh()} runJob={executeJob} /> : activeSection === "Uživatelé" ? <UsersView users={snapshot.users} onRefresh={() => router.refresh()} runJob={executeJob} /> : <>
+          {activeSection === "Nastavení" ? <SettingsView notify={notify} /> : activeSection === "Úkoly" ? <TodoView notify={notify} onActiveCountChange={setActiveTodoCount} /> : activeSection === "Databáze" ? <DatabaseView databases={snapshot.databases} onRefresh={() => router.refresh()} runJob={executeJob} /> : activeSection === "Uživatelé" ? <UsersView users={snapshot.users} onRefresh={() => router.refresh()} runJob={executeJob} /> : <>
           <section className="page-heading"><div><div className={snapshot.services.every((service) => service.state !== "Nedostupné") ? "eyebrow neutral" : "eyebrow issue"}><span className={snapshot.services.every((service) => service.state !== "Nedostupné") ? "status-dot success" : "status-dot issue"} /> {snapshot.services.every((service) => service.state !== "Nedostupné") ? "Všechny sledované služby jsou dostupné a běží" : "Některá služba vyžaduje pozornost"}</div><h1>Onremote.cz</h1><p>Živý stav z {new Date(snapshot.collectedAt).toLocaleString("cs-CZ")}.</p></div><div className="heading-actions"><button className="secondary-button" onClick={() => router.refresh()}><RefreshCw size={17} /> Obnovit</button><button className="primary-button" onClick={openNewDomain}><Plus size={17} /> Přidat doménu</button></div></section>
           <section className="metrics-grid" aria-label="Využití serveru">{snapshot.metrics.map(({ label, value, detail, tone, usagePercent }, index) => { const Icon = metricIcons[index]; const circumference = 2 * Math.PI * 30; const utilizationTone = usagePercent === undefined ? "" : usagePercent <= 30 ? "low" : usagePercent <= 75 ? "medium" : "high"; return <article className="metric-card" key={label}><span className={`metric-icon ${tone}`}><Icon size={19} /></span><div><span>{label}</span><strong>{value}</strong><small>{detail}</small></div>{usagePercent !== undefined && <div className={`utilization-chart ${utilizationTone}`} role="img" aria-label={`${label}: ${usagePercent} %`}><svg viewBox="0 0 72 72" aria-hidden="true"><circle className="utilization-track" cx="36" cy="36" r="30" /><circle className="utilization-value" cx="36" cy="36" r="30" strokeDasharray={circumference} strokeDashoffset={circumference * (1 - usagePercent / 100)} /></svg><span>{usagePercent}<small>%</small></span></div>}</article>; })}</section>
 
