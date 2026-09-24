@@ -43,6 +43,12 @@ jobs:
             https://raw.githubusercontent.com/davidfronek/vps-dashboard/main/scripts/domain-admin.sh \
             --output "$HELPER_SOURCE"
           install -o root -g root -m 0755 "$HELPER_SOURCE" /usr/local/sbin/vps-dashboard-domains
+          install -d -o root -g www-data -m 0750 /var/lib/vps-dashboard
+          if [[ ! -f /var/lib/vps-dashboard/todos-admin.json ]]; then
+            printf '[]\n' > /var/lib/vps-dashboard/todos-admin.json
+          fi
+          chown www-data:www-data /var/lib/vps-dashboard/todos-admin.json
+          chmod 0640 /var/lib/vps-dashboard/todos-admin.json
 
           /usr/local/sbin/vps-dashboard-domains domain-deploy \
             onremote.cz \
