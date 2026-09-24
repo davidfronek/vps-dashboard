@@ -5,7 +5,7 @@ import { dirname } from "node:path";
 import type { TodoItem } from "@/lib/todo-types";
 
 const TODO_FILE = process.env.NODE_ENV === "production"
-  ? "/var/lib/vps-dashboard/todos-admin.json"
+  ? "/var/lib/vps-dashboard/todos/admin.json"
   : ".data/admin-todos.json";
 
 let writeQueue = Promise.resolve();
