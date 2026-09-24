@@ -22,7 +22,14 @@ jobs:
           APP_DIR=/srv/apps/onremote.cz
           SERVICE=vps-app-onremote-cz
 
-          /usr/local/bin/update-apps.sh "vps-dashobard"
+          /usr/local/sbin/vps-dashboard-domains domain-deploy \
+            onremote.cz \
+            https://github.com/davidfronek/vps-dashboard.git \
+            main \
+            3000 \
+            1 \
+            1 \
+            1
 
           grep -Fq "Všechny sledované služby jsou dostupné a běží" "$APP_DIR/src/app/dashboard.tsx"
           systemctl is-active --quiet "$SERVICE"
