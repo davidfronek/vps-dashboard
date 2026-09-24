@@ -36,6 +36,9 @@ APP_SLUG="${DOMAIN//./-}"
 APP_DIR="/srv/apps/$DOMAIN"
 SERVICE_NAME="vps-app-$APP_SLUG"
 NGINX_CONFIG="/etc/nginx/sites-available/$DOMAIN"
+ENV_FILE="/var/lib/vps-dashboard/apps/$DOMAIN.env"
+
+
 NPM_BIN="$(command -v npm)"
 SSH_REPOSITORY="git@github.com:${REPOSITORY#https://github.com/}"
 [[ $SSH_REPOSITORY == *.git ]] || SSH_REPOSITORY="${SSH_REPOSITORY}.git"
@@ -65,6 +68,7 @@ After=network.target
 Type=simple
 User=www-data
 WorkingDirectory=$APP_DIR
+EnvironmentFile=-$ENV_FILE
 Environment=NODE_ENV=production
 Environment=PORT=$PORT
 ExecStart=$NPM_BIN start -- --port $PORT

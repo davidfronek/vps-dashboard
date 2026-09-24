@@ -498,6 +498,7 @@ After=network.target
 Type=simple
 User=www-data
 WorkingDirectory=$SERVICE_WORKING_DIRECTORY
+EnvironmentFile=-$APP_STATE_DIR/$DOMAIN.env
 Environment=NODE_ENV=production
 Environment=PORT=$PORT
 ExecStart=$SERVICE_EXEC_START
@@ -550,7 +551,7 @@ EOF
     rm -f "$NGINX_AVAILABLE/$DOMAIN" "$NGINX_AVAILABLE/www.$DOMAIN"
     step "Odstraňuji konfiguraci a data"
     rm -rf -- "/srv/apps/$DOMAIN"
-    rm -f "$APP_STATE_DIR/$DOMAIN"
+    rm -f "$APP_STATE_DIR/$DOMAIN" "$APP_STATE_DIR/$DOMAIN.env"
     certbot delete --cert-name "$DOMAIN" --non-interactive 2>/dev/null || true
     systemctl daemon-reload
     step "Ověřuji a načítám konfiguraci Nginx"
