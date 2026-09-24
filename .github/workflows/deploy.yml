@@ -17,5 +17,21 @@ jobs:
         key: ${{ secrets.SSH_KEY }}
         port: ${{ secrets.SSH_PORT }}
         script: |
-          # Spustí centrální skript a předá mu název tohoto repozitáře z GitHubu
+          set -Eeuo pipefail
+
+          APP_DIR=/srv/apps/onremote.cz
+          SERVICE=vps-app-onremote-cz
+          COMMIT=${{ github.sha }}
+
           /usr/local/bin/update-apps.sh "${{ github.event.repository.name }}"
+
+          if [[ "$(git -C "$APP_DIR" rev-parse HEAD 2>/dev/null || true)" != "$COMMIT" ]]; then
+            git -C "$APP_DIR" fetch --prune origin main
+            git -C "$APP_DIR" checkout -B main origin/main
+            npm --prefix "$APP_DIR" ci
+            npm --prefix "$APP_DIR" run build
+            systemctl restart "$SERVICE"
+          fi
+
+          test "$(git -C "$APP_DIR" rev-parse HEAD)" = "$COMMIT"
+          systemctl is-active --quiet "$SERVICE"
