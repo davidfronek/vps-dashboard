@@ -32,6 +32,7 @@ export type DomainStatus = {
     branch: string;
     port: number;
   };
+  environmentKeys: string[];
 };
 
 export type PostgreSqlDatabase = {
@@ -160,9 +161,17 @@ function readDomains(): DomainStatus[] {
 
       for (const name of names.filter((value) => value !== "_" && !value.includes("$"))) {
         let deployment: DomainStatus["deployment"];
+        let environmentKeys: string[] = [];
+        const managedName = name.replace(/^www\./, "");
         try {
-          const [repository, branch, port] = readFileSync(`/var/lib/vps-dashboard/apps/${name.replace(/^www\./, "")}`, "utf8").trim().split("\t");
+          const [repository, branch, port] = readFileSync(`/var/lib/vps-dashboard/apps/${managedName}`, "utf8").trim().split("\t");
           if (repository && branch && Number.isInteger(Number(port))) deployment = { repository, branch, port: Number(port) };
+        } catch {}
+        try {
+          environmentKeys = readFileSync(`/var/lib/vps-dashboard/apps/${managedName}.env`, "utf8")
+            .split(/\r?\n/)
+            .flatMap((line) => line.match(/^([A-Za-z_][A-Za-z0-9_]*)=/)?.[1] ?? [])
+            .sort((left, right) => left.localeCompare(right));
         } catch {}
         domains.set(name, {
           name,
@@ -173,6 +182,7 @@ function readDomains(): DomainStatus[] {
           forceHttps: redirectsToHttps,
           wwwRedirect: name.startsWith("www.") && target === "Přesměrování",
           deployment,
+          environmentKeys,
         });
       }
     }

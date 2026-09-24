@@ -50,6 +50,41 @@ if [[ $ACTION == "database-list" ]]; then
   exit
 fi
 
+if [[ $ACTION == "domain-env-set" || $ACTION == "domain-env-delete" ]]; then
+  DOMAIN="$SUBJECT"
+  KEY="${3:-}"
+  [[ $DOMAIN =~ ^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$ && $DOMAIN == *.* && $DOMAIN != *..* ]] || { echo "Invalid domain." >&2; exit 1; }
+  [[ $KEY =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || { echo "Invalid environment variable name." >&2; exit 1; }
+  [[ -f $APP_STATE_DIR/$DOMAIN ]] || { echo "Domain is not a managed deployment." >&2; exit 1; }
+  install -d -o root -g www-data -m 0750 "$APP_STATE_DIR"
+  ENV_FILE="$APP_STATE_DIR/$DOMAIN.env"
+  TEMP_FILE="$(mktemp "$APP_STATE_DIR/.${DOMAIN}.env.XXXXXX")"
+  trap 'rm -f "$TEMP_FILE"' EXIT
+  VALUE=""
+  if [[ $ACTION == "domain-env-set" ]]; then
+    IFS= read -r VALUE || [[ -n $VALUE ]]
+    ((${#VALUE} <= 8192)) || { echo "Environment variable value is too long." >&2; exit 1; }
+  fi
+  ENV_FILE="$ENV_FILE" TEMP_FILE="$TEMP_FILE" KEY="$KEY" VALUE="$VALUE" ACTION="$ACTION" node <<'NODE'
+const fs = require("node:fs");
+const { ACTION, ENV_FILE, KEY, TEMP_FILE, VALUE } = process.env;
+const lines = fs.existsSync(ENV_FILE) ? fs.readFileSync(ENV_FILE, "utf8").split(/\r?\n/) : [];
+const prefix = `${KEY}=`;
+const next = lines.filter((line) => line && !line.startsWith(prefix));
+if (ACTION === "domain-env-set") {
+  const escaped = VALUE.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  next.push(`${KEY}="${escaped}"`);
+}
+fs.writeFileSync(TEMP_FILE, next.length ? `${next.join("\n")}\n` : "");
+NODE
+  install -o root -g www-data -m 0640 "$TEMP_FILE" "$ENV_FILE"
+  rm -f "$TEMP_FILE"
+  trap - EXIT
+  systemctl restart "vps-app-${DOMAIN//./-}"
+  systemctl is-active --quiet "vps-app-${DOMAIN//./-}"
+  exit
+fi
+
 if [[ $ACTION == "enqueue" ]]; then
   JOB_ID="$SUBJECT"
   OPERATION="${3:-}"
