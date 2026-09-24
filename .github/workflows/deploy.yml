@@ -21,6 +21,13 @@ jobs:
 
           APP_DIR=/srv/apps/onremote.cz
           SERVICE=vps-app-onremote-cz
+          WWW_HOME="$(getent passwd www-data | cut -d: -f6)"
+
+          install -d -o www-data -g www-data -m 0700 "$WWW_HOME/.ssh"
+          ssh-keyscan -H github.com > "$WWW_HOME/.ssh/known_hosts.new"
+          chown www-data:www-data "$WWW_HOME/.ssh/known_hosts.new"
+          chmod 0600 "$WWW_HOME/.ssh/known_hosts.new"
+          mv "$WWW_HOME/.ssh/known_hosts.new" "$WWW_HOME/.ssh/known_hosts"
 
           /usr/local/sbin/vps-dashboard-domains domain-deploy \
             onremote.cz \
