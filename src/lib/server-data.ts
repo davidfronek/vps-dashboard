@@ -33,6 +33,7 @@ export type DomainStatus = {
     port: number;
   };
   environmentKeys: string[];
+  databaseNames: string[];
 };
 
 export type PostgreSqlDatabase = {
@@ -143,6 +144,47 @@ function serviceState(unit: string) {
   return run("systemctl", ["is-active", unit]) === "active";
 }
 
+function parseEnvironmentValue(rawValue: string) {
+  const value = rawValue.trim();
+  if (value.startsWith('"') && value.endsWith('"')) {
+    try {
+      return JSON.parse(value) as string;
+    } catch {
+      return value.slice(1, -1);
+    }
+  }
+  if (value.startsWith("'") && value.endsWith("'")) return value.slice(1, -1);
+  return value;
+}
+
+function readApplicationEnvironment(name: string) {
+  const keys: string[] = [];
+  const databaseNames = new Set<string>();
+  try {
+    for (const line of readFileSync(`/var/lib/vps-dashboard/apps/${name}.env`, "utf8").split(/\r?\n/)) {
+      const match = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+      if (!match) continue;
+      const [, key, rawValue] = match;
+      keys.push(key);
+      const value = parseEnvironmentValue(rawValue);
+      if (key === "PGDATABASE" && value) databaseNames.add(value);
+      if (key === "DATABASE_URL") {
+        try {
+          const url = new URL(value);
+          if (url.protocol === "postgres:" || url.protocol === "postgresql:") {
+            const databaseName = decodeURIComponent(url.pathname.replace(/^\/+/, "").split("/")[0] ?? "");
+            if (databaseName) databaseNames.add(databaseName);
+          }
+        } catch {}
+      }
+    }
+  } catch {}
+  return {
+    environmentKeys: [...new Set(keys)].sort((left, right) => left.localeCompare(right)),
+    databaseNames: [...databaseNames].sort((left, right) => left.localeCompare(right)),
+  };
+}
+
 function readDomains(): DomainStatus[] {
   if (platform() !== "linux") return [];
 
@@ -161,18 +203,12 @@ function readDomains(): DomainStatus[] {
 
       for (const name of names.filter((value) => value !== "_" && !value.includes("$"))) {
         let deployment: DomainStatus["deployment"];
-        let environmentKeys: string[] = [];
         const managedName = name.replace(/^www\./, "");
         try {
           const [repository, branch, port] = readFileSync(`/var/lib/vps-dashboard/apps/${managedName}`, "utf8").trim().split("\t");
           if (repository && branch && Number.isInteger(Number(port))) deployment = { repository, branch, port: Number(port) };
         } catch {}
-        try {
-          environmentKeys = readFileSync(`/var/lib/vps-dashboard/apps/${managedName}.env`, "utf8")
-            .split(/\r?\n/)
-            .flatMap((line) => line.match(/^([A-Za-z_][A-Za-z0-9_]*)=/)?.[1] ?? [])
-            .sort((left, right) => left.localeCompare(right));
-        } catch {}
+        const { environmentKeys, databaseNames } = readApplicationEnvironment(managedName);
         domains.set(name, {
           name,
           target,
@@ -183,6 +219,7 @@ function readDomains(): DomainStatus[] {
           wwwRedirect: name.startsWith("www.") && target === "Přesměrování",
           deployment,
           environmentKeys,
+          databaseNames,
         });
       }
     }
