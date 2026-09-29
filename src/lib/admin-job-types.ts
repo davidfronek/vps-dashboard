@@ -25,4 +25,5 @@ export type AdminJob = {
   title: string;
   message: string;
   steps: AdminJobStep[];
+  details?: string[];
 };

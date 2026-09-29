@@ -44,5 +44,7 @@ export default function AdminJobProgress({ job, onClose }: { job: AdminJob; onCl
       {job.steps.length === 0 && <li className={job.status === "failed" ? "failed" : "running"}><Circle size={14} /><span>{job.status === "failed" ? "Operace se nespustila." : "Čekám na spuštění na serveru..."}</span></li>}
     </ol>
     {finished && <p className={job.status}>{job.message}</p>}
+    {job.status === "failed" && job.details && job.details.length > 0 &&
+      <pre className="job-progress-details">{job.details.join("\n")}</pre>}
   </aside>;
 }

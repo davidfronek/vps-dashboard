@@ -10,6 +10,7 @@ function parseJob(id: string, output: string): AdminJob {
   let title = "Správa serveru";
   let message = "";
   const labels: string[] = [];
+  const details: string[] = [];
 
   for (const line of output.split("\n")) {
     const separator = line.indexOf("|");
@@ -20,13 +21,14 @@ function parseJob(id: string, output: string): AdminJob {
     if (key === "TITLE") title = value;
     if (key === "MESSAGE") message = value;
     if (key === "STEP") labels.push(value);
+    if (key === "DETAIL") details.push(value);
   }
 
   const steps: AdminJobStep[] = labels.map((label, index) => ({
     label,
     state: status === "failed" && index === labels.length - 1 ? "failed" : status === "running" && index === labels.length - 1 ? "running" : "done",
   }));
-  return { id, status, title, message, steps };
+  return { id, status, title, message, steps, details };
 }
 
 export async function GET(_request: Request, context: { params: Promise<{ id: string }> }) {
