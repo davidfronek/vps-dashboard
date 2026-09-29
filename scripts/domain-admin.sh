@@ -121,25 +121,25 @@ if [[ $ACTION == "run-job" ]]; then
   JOB_LOG="$JOB_DIR/$JOB_ID.log"
   install -o root -g www-data -m 0640 /dev/null "$JOB_LOG"
   job_line STATUS running
-  trap 'job_line STATUS failed; job_line MESSAGE "Operace byla přerušena."; exit 1' HUP INT TERM
+  trap 'job_line MESSAGE "Operace byla přerušena."; job_line STATUS failed; exit 1' HUP INT TERM
   RESOURCE_KIND="${OPERATION%%-*}"
   RESOURCE_ID="${1:-}-${2:-}"
   exec 9>"$LOCK_DIR/${RESOURCE_KIND}-${RESOURCE_ID//[^a-zA-Z0-9_.-]/_}.lock"
   if ! flock -n 9; then
-    job_line STATUS failed
     job_line MESSAGE "Na stejném objektu právě probíhá jiná operace."
+    job_line STATUS failed
     exit 1
   fi
   if "$0" "$OPERATION" "$@" 2>&1 | tee "$JOB_LOG"; then
-    job_line STATUS succeeded
     job_line MESSAGE "Operace byla úspěšně dokončena."
+    job_line STATUS succeeded
     exit 0
   else
-    job_line STATUS failed
     job_line MESSAGE "Operace na serveru selhala. Podrobnosti jsou uvedeny níže."
     tail -n 30 "$JOB_LOG" | sed $'s/\033\[[0-9;]*[[:alpha:]]//g' | while IFS= read -r line; do
       [[ -z $line ]] || job_line DETAIL "$line"
     done
+    job_line STATUS failed
     exit 1
   fi
 fi
