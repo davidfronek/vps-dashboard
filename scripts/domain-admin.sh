@@ -185,6 +185,13 @@ valid_database_name() {
   [[ $1 =~ ^[a-z][a-z0-9_]{0,62}$ ]]
 }
 
+if [[ $ACTION == "database-structure" ]]; then
+  DATABASE="$SUBJECT"
+  valid_database_name "$DATABASE" || { echo "Invalid database." >&2; exit 1; }
+  runuser -u postgres -- psql --dbname postgres --tuples-only --no-align --command="SELECT 1 FROM pg_database WHERE datname = '$DATABASE'" | grep -qx 1 || { echo "Database does not exist." >&2; exit 1; }
+  exec node /usr/local/lib/vps-dashboard/database-editor.mjs tables "$DATABASE"
+fi
+
 if [[ $ACTION == "database-editor" ]]; then
   DATABASE="$SUBJECT"
   valid_database_name "$DATABASE" || { echo "Invalid database." >&2; exit 1; }

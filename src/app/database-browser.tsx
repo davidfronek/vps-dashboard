@@ -2,9 +2,8 @@
 
 import { ChevronLeft, ChevronRight, Columns3, Database, LoaderCircle, Pencil, Plus, RefreshCw, Rows3, TableProperties, Trash2, X } from "lucide-react";
 import { FormEvent, useEffect, useEffectEvent, useState } from "react";
+import type { ColumnInfo, TableInfo } from "@/lib/database-types";
 
-type ColumnInfo = { name: string; type: string; nullable: boolean; primaryKey: boolean; editable: boolean };
-type TableInfo = { name: string; estimatedRows: number; size: string; columns: ColumnInfo[] };
 type RowValue = Record<string, unknown> & { __rowId: string };
 
 const columnTypes = [

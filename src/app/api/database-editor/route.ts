@@ -39,7 +39,10 @@ function encoded(value: unknown) {
 }
 
 function execute(database: string, operation: string, args: string[] = []) {
-  const output = execFileSync("sudo", ["-n", HELPER, "database-editor", database, operation, ...args], {
+  const helperArguments = operation === "tables"
+    ? ["-n", HELPER, "database-structure", database]
+    : ["-n", HELPER, "database-editor", database, operation, ...args];
+  const output = execFileSync("sudo", helperArguments, {
     encoding: "utf8",
     timeout: 15_000,
     maxBuffer: 10 * 1024 * 1024,
