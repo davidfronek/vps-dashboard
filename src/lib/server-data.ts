@@ -41,6 +41,7 @@ export type PostgreSqlDatabase = {
   owner: string;
   size: string;
   connections: number;
+  records: number;
   managed: boolean;
 };
 
@@ -231,9 +232,9 @@ function readDomains(): DomainStatus[] {
 
 function readDatabases(): PostgreSqlDatabase[] {
   return run("sudo", ["-n", "/usr/local/sbin/vps-dashboard-domains", "database-list"]).split("\n").filter(Boolean).flatMap((line) => {
-    const [name, owner, size, connections] = line.split("\t");
+    const [name, owner, size, connections, records] = line.split("\t");
     if (!name || !owner || !size) return [];
-    return [{ name, owner, size, connections: Number(connections) || 0, managed: existsSync(`/var/lib/vps-dashboard/databases/${name}`) }];
+    return [{ name, owner, size, connections: Number(connections) || 0, records: Number(records) || 0, managed: existsSync(`/var/lib/vps-dashboard/databases/${name}`) }];
   });
 }
 
