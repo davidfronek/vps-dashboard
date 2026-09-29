@@ -522,6 +522,11 @@ EOF
     fi
     mv "$TEMP_DIR" "$APP_DIR"
     trap - EXIT
+    if [[ -n $BACKUP_DIR && -d $BACKUP_DIR/data ]]; then
+      rm -rf -- "$APP_DIR/data"
+      cp -a "$BACKUP_DIR/data" "$APP_DIR/data"
+      chown -R www-data:www-data "$APP_DIR/data"
+    fi
     rollback_deploy() {
       local exit_code=$?
       printf 'Deployment command failed at line %s (exit %s): %s\n' "${BASH_LINENO[0]}" "$exit_code" "$BASH_COMMAND" >&2
