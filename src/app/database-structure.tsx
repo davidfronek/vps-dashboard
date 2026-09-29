@@ -4,13 +4,9 @@ import { ChevronDown, ChevronRight, LoaderCircle, RefreshCw, TableProperties } f
 import { useEffect, useEffectEvent, useState } from "react";
 import type { RowValue, TableInfo } from "@/lib/database-types";
 
-const SENSITIVE_COLUMN = /(?:password|passwd|hash|secret|token|private[_-]?key|api[_-]?key)/i;
-
-function displayValue(column: string, value: unknown) {
-  if (SENSITIVE_COLUMN.test(column) && value !== null) return "••••••••";
+function displayValue(value: unknown) {
   if (value === null || value === undefined) return "NULL";
-  const text = typeof value === "object" ? JSON.stringify(value) : String(value);
-  return text.length > 160 ? `${text.slice(0, 157)}...` : text;
+  return typeof value === "object" ? JSON.stringify(value, null, 2) : String(value);
 }
 
 function StoredRows({ database, table }: { database: string; table: TableInfo }) {
@@ -45,7 +41,7 @@ function StoredRows({ database, table }: { database: string; table: TableInfo })
 
   return <div className="database-rows">
     <div className="database-rows-heading"><span>Uložená data · {total} {total === 1 ? "záznam" : total < 5 ? "záznamy" : "záznamů"}</span><span>Zobrazeno prvních {rows.length}</span></div>
-    <div className="database-rows-scroll"><table><thead><tr>{table.columns.map((column) => <th key={column.name}>{column.name}</th>)}</tr></thead><tbody>{rows.map((row) => <tr key={row.__rowId}>{table.columns.map((column) => <td key={column.name} title={displayValue(column.name, row[column.name])}>{displayValue(column.name, row[column.name])}</td>)}</tr>)}</tbody></table></div>
+    <div className="database-rows-scroll"><table><thead><tr>{table.columns.map((column) => <th key={column.name}>{column.name}</th>)}</tr></thead><tbody>{rows.map((row) => <tr key={row.__rowId}>{table.columns.map((column) => <td key={column.name}>{displayValue(row[column.name])}</td>)}</tr>)}</tbody></table></div>
   </div>;
 }
 
