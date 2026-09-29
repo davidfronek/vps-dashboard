@@ -185,6 +185,11 @@ valid_database_name() {
   [[ $1 =~ ^[a-z][a-z0-9_]{0,62}$ ]]
 }
 
+run_certbot() {
+  install -d -o root -g root -m 0755 "$LOCK_DIR"
+  flock --wait 600 "$LOCK_DIR/certbot.lock" certbot "$@"
+}
+
 if [[ $ACTION == "database-structure" ]]; then
   DATABASE="$SUBJECT"
   valid_database_name "$DATABASE" || { echo "Invalid database." >&2; exit 1; }
@@ -318,7 +323,7 @@ EOF
     local certbot_args=(--nginx --non-interactive --cert-name "$DOMAIN" -d "$DOMAIN")
     [[ $www_redirect == "1" ]] && certbot_args+=(-d "www.$DOMAIN")
     [[ $force_https == "1" ]] && certbot_args+=(--redirect) || certbot_args+=(--no-redirect)
-    certbot "${certbot_args[@]}"
+    run_certbot "${certbot_args[@]}"
   fi
 }
 
@@ -367,7 +372,7 @@ EOF
     local certbot_args=(--nginx --non-interactive --cert-name "$DOMAIN" -d "$DOMAIN")
     [[ $www_redirect == "1" ]] && certbot_args+=(-d "www.$DOMAIN")
     [[ $force_https == "1" ]] && certbot_args+=(--redirect) || certbot_args+=(--no-redirect)
-    certbot "${certbot_args[@]}"
+    run_certbot "${certbot_args[@]}"
   fi
 }
 
@@ -426,7 +431,7 @@ EOF
     local certbot_args=(--nginx --non-interactive --cert-name "$DOMAIN" -d "$DOMAIN")
     [[ $www_redirect == "1" ]] && certbot_args+=(-d "www.$DOMAIN")
     [[ $force_https == "1" ]] && certbot_args+=(--redirect) || certbot_args+=(--no-redirect)
-    certbot "${certbot_args[@]}"
+    run_certbot "${certbot_args[@]}"
   fi
 }
 
@@ -610,7 +615,7 @@ EOF
     DOMAIN="$SUBJECT"
     valid_domain "$DOMAIN" || { echo "Invalid domain." >&2; exit 1; }
     step "Obnovuji certifikát pomocí Certbotu"
-    certbot renew --cert-name "$DOMAIN" --force-renewal --non-interactive
+    run_certbot renew --cert-name "$DOMAIN" --force-renewal --non-interactive
     step "Ověřuji a načítám konfiguraci Nginx"
     nginx -t
     systemctl reload nginx
@@ -630,7 +635,7 @@ EOF
     step "Odstraňuji konfiguraci a data"
     rm -rf -- "/srv/apps/$DOMAIN"
     rm -f "$APP_STATE_DIR/$DOMAIN" "$APP_STATE_DIR/$DOMAIN.env"
-    certbot delete --cert-name "$DOMAIN" --non-interactive 2>/dev/null || true
+    run_certbot delete --cert-name "$DOMAIN" --non-interactive 2>/dev/null || true
     systemctl daemon-reload
     step "Ověřuji a načítám konfiguraci Nginx"
     nginx -t
