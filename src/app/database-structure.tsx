@@ -2,7 +2,52 @@
 
 import { ChevronDown, ChevronRight, LoaderCircle, RefreshCw, TableProperties } from "lucide-react";
 import { useEffect, useEffectEvent, useState } from "react";
-import type { TableInfo } from "@/lib/database-types";
+import type { RowValue, TableInfo } from "@/lib/database-types";
+
+const SENSITIVE_COLUMN = /(?:password|passwd|hash|secret|token|private[_-]?key|api[_-]?key)/i;
+
+function displayValue(column: string, value: unknown) {
+  if (SENSITIVE_COLUMN.test(column) && value !== null) return "••••••••";
+  if (value === null || value === undefined) return "NULL";
+  const text = typeof value === "object" ? JSON.stringify(value) : String(value);
+  return text.length > 160 ? `${text.slice(0, 157)}...` : text;
+}
+
+function StoredRows({ database, table }: { database: string; table: TableInfo }) {
+  const [rows, setRows] = useState<RowValue[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+
+  async function loadRows() {
+    setLoading(true);
+    setError("");
+    try {
+      const query = new URLSearchParams({ database, table: table.name, offset: "0" });
+      const response = await fetch(`/api/database-editor?${query}`, { cache: "no-store" });
+      const body = await response.json() as { rows?: RowValue[]; total?: number; message?: string };
+      if (!response.ok) throw new Error(body.message ?? "Uložená data se nepodařilo načíst.");
+      setRows(body.rows ?? []);
+      setTotal(body.total ?? 0);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Uložená data se nepodařilo načíst.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const loadInitialRows = useEffectEvent(loadRows);
+  useEffect(() => { void Promise.resolve().then(() => loadInitialRows()); }, [database, table.name]);
+
+  if (loading) return <div className="database-rows-state"><LoaderCircle className="spin" size={13} /> Načítám uložená data...</div>;
+  if (error) return <div className="database-rows-state error"><span>{error}</span><button type="button" onClick={() => void loadRows()} aria-label={`Znovu načíst data tabulky ${table.name}`}><RefreshCw size={13} /></button></div>;
+  if (rows.length === 0) return <div className="database-rows-state">Tabulka neobsahuje žádná uložená data.</div>;
+
+  return <div className="database-rows">
+    <div className="database-rows-heading"><span>Uložená data · {total} {total === 1 ? "záznam" : total < 5 ? "záznamy" : "záznamů"}</span><span>Zobrazeno prvních {rows.length}</span></div>
+    <div className="database-rows-scroll"><table><thead><tr>{table.columns.map((column) => <th key={column.name}>{column.name}</th>)}</tr></thead><tbody>{rows.map((row) => <tr key={row.__rowId}>{table.columns.map((column) => <td key={column.name} title={displayValue(column.name, row[column.name])}>{displayValue(column.name, row[column.name])}</td>)}</tr>)}</tbody></table></div>
+  </div>;
+}
 
 export default function DatabaseStructure({ database }: { database: string }) {
   const [tables, setTables] = useState<TableInfo[]>([]);
@@ -43,7 +88,7 @@ export default function DatabaseStructure({ database }: { database: string }) {
           <strong>{table.name}</strong>
           <span>{table.columns.length} sloupců · {table.estimatedRows} řádků · {table.size}</span>
         </button>
-        {expanded && <div className="database-column-list">{table.columns.map((column) => <div key={column.name}><strong>{column.name}</strong><code>{column.type}</code><span>{column.primaryKey ? "PK" : column.nullable ? "NULL" : "NOT NULL"}</span></div>)}</div>}
+        {expanded && <><div className="database-column-list">{table.columns.map((column) => <div key={column.name}><strong>{column.name}</strong><code>{column.type}</code><span>{column.primaryKey ? "PK" : column.nullable ? "NULL" : "NOT NULL"}</span></div>)}</div><StoredRows database={database} table={table} /></>}
       </div>;
     })}
   </div>;

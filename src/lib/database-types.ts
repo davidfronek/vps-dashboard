@@ -12,3 +12,5 @@ export type TableInfo = {
   size: string;
   columns: ColumnInfo[];
 };
+
+export type RowValue = Record<string, unknown> & { __rowId: string };

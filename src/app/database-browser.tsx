@@ -2,9 +2,7 @@
 
 import { ChevronLeft, ChevronRight, Columns3, Database, LoaderCircle, Pencil, Plus, RefreshCw, Rows3, TableProperties, Trash2, X } from "lucide-react";
 import { FormEvent, useEffect, useEffectEvent, useState } from "react";
-import type { ColumnInfo, TableInfo } from "@/lib/database-types";
-
-type RowValue = Record<string, unknown> & { __rowId: string };
+import type { ColumnInfo, RowValue, TableInfo } from "@/lib/database-types";
 
 const columnTypes = [
   ["bigserial", "Automatické ID"], ["text", "Text"], ["varchar", "Krátký text"], ["integer", "Celé číslo"],
