@@ -3,6 +3,13 @@ set -Eeuo pipefail
 
 [[ $EUID -eq 0 ]] || { echo "Root privileges are required." >&2; exit 1; }
 
+report_error() {
+  local exit_code=$?
+  printf 'Command failed at line %s (exit %s): %s\n' "${BASH_LINENO[0]}" "$exit_code" "$BASH_COMMAND" >&2
+}
+
+trap report_error ERR
+
 ACTION="${1:-}"
 SUBJECT="${2:-}"
 NGINX_AVAILABLE="/etc/nginx/sites-available"
@@ -516,6 +523,8 @@ EOF
     mv "$TEMP_DIR" "$APP_DIR"
     trap - EXIT
     rollback_deploy() {
+      local exit_code=$?
+      printf 'Deployment command failed at line %s (exit %s): %s\n' "${BASH_LINENO[0]}" "$exit_code" "$BASH_COMMAND" >&2
       trap - ERR
       systemctl stop "$SERVICE_NAME" 2>/dev/null || true
       rm -rf -- "$APP_DIR"
