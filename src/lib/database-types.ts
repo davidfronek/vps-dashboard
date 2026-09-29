@@ -8,7 +8,7 @@ export type ColumnInfo = {
 
 export type TableInfo = {
   name: string;
-  estimatedRows: number;
+  rowCount: number;
   size: string;
   columns: ColumnInfo[];
 };

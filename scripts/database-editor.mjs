@@ -50,11 +50,10 @@ function jsonResult(sql, fallback) {
 if (!IDENTIFIER.test(database ?? "")) throw new Error("Invalid database");
 
 if (operation === "tables") {
-  jsonResult(`
+  const result = JSON.parse(run(`
     SELECT json_build_object(
       'tables', COALESCE(json_agg(json_build_object(
         'name', c.relname,
-        'estimatedRows', GREATEST(c.reltuples::bigint, 0),
         'size', pg_size_pretty(pg_total_relation_size(c.oid)),
         'columns', (SELECT json_agg(json_build_object(
           'name', a.attname,
@@ -70,7 +69,11 @@ if (operation === "tables") {
     FROM pg_class c
     JOIN pg_namespace n ON n.oid = c.relnamespace
     WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p');
-  `, { tables: [] });
+  `) || '{"tables":[]}');
+  for (const table of result.tables) {
+    table.rowCount = Number(run(`SELECT count(*) FROM public.${identifier(table.name)}`));
+  }
+  process.stdout.write(JSON.stringify(result));
 } else if (operation === "rows") {
   const table = identifier(args[0]);
   const offset = Number.parseInt(args[1] ?? "0", 10);

@@ -54,7 +54,7 @@ fi
 
 if [[ $ACTION == "database-list" ]]; then
   while IFS=$'\t' read -r name owner size connections; do
-    records="$(runuser -u postgres -- psql --dbname "$name" --no-align --tuples-only --command="SELECT COALESCE(sum(n_live_tup), 0)::bigint FROM pg_stat_user_tables")"
+    records="$(runuser -u postgres -- psql --dbname "$name" --no-align --tuples-only --command="SELECT format('SELECT count(*) FROM %I.%I;', schemaname, tablename) FROM pg_tables WHERE schemaname = 'public'" | runuser -u postgres -- psql --dbname "$name" --no-align --tuples-only | awk '{ total += $1 } END { print total + 0 }')"
     printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$owner" "$size" "$connections" "${records:-0}"
   done < <(runuser -u postgres -- psql --dbname postgres --no-align --tuples-only --field-separator=$'\t' --command="SELECT d.datname, pg_get_userbyid(d.datdba), pg_size_pretty(pg_database_size(d.datname)), (SELECT count(*) FROM pg_stat_activity a WHERE a.datname = d.datname) FROM pg_database d WHERE NOT d.datistemplate AND d.datallowconn ORDER BY d.datname")
   exit

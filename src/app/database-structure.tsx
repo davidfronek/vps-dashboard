@@ -82,7 +82,7 @@ export default function DatabaseStructure({ database }: { database: string }) {
           {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
           <TableProperties size={14} />
           <strong>{table.name}</strong>
-          <span>{table.columns.length} sloupců · {table.estimatedRows} řádků · {table.size}</span>
+          <span>{table.columns.length} sloupců · {table.rowCount.toLocaleString("cs-CZ")} řádků · {table.size}</span>
         </button>
         {expanded && <><div className="database-column-list">{table.columns.map((column) => <div key={column.name}><strong>{column.name}</strong><code>{column.type}</code><span>{column.primaryKey ? "PK" : column.nullable ? "NULL" : "NOT NULL"}</span></div>)}</div><StoredRows database={database} table={table} /></>}
       </div>;
