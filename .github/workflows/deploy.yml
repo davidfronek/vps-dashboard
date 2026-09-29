@@ -38,7 +38,7 @@ jobs:
           echo "GitHub account key: $(cat "$WWW_HOME/.ssh/github_account_ed25519.pub")"
 
           HELPER_SOURCE="$(mktemp)"
-          DATABASE_EDITOR_SOURCE="$(mktemp)"
+          DATABASE_EDITOR_SOURCE="$(mktemp --suffix=.mjs)"
           trap 'rm -f "$HELPER_SOURCE" "$DATABASE_EDITOR_SOURCE"' EXIT
           curl --fail --silent --show-error --location \
             https://raw.githubusercontent.com/davidfronek/vps-dashboard/${{ github.sha }}/scripts/domain-admin.sh \
