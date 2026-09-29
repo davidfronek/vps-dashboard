@@ -477,10 +477,13 @@ EOF
     APP_MODE=""
     if [[ -s $TEMP_DIR/package.json && -s $TEMP_DIR/package-lock.json ]]; then
       APP_MODE="root"
+      node -e 'const p=require(process.argv[1]);process.exit(typeof p.scripts?.start==="string"&&p.scripts.start.trim()?0:1)' "$TEMP_DIR/package.json" || { echo "Root application must define an npm start script." >&2; exit 1; }
       step "Instaluji závislosti"
       runuser -u www-data -- env HOME="$TEMP_DIR" npm_config_cache="$TEMP_DIR/.npm" npm --prefix "$TEMP_DIR" ci
-      step "Sestavuji aplikaci"
-      runuser -u www-data -- env HOME="$TEMP_DIR" npm_config_cache="$TEMP_DIR/.npm" npm --prefix "$TEMP_DIR" run build
+      if node -e 'const p=require(process.argv[1]);process.exit(typeof p.scripts?.build==="string"&&p.scripts.build.trim()?0:1)' "$TEMP_DIR/package.json"; then
+        step "Sestavuji aplikaci"
+        runuser -u www-data -- env HOME="$TEMP_DIR" npm_config_cache="$TEMP_DIR/.npm" npm --prefix "$TEMP_DIR" run build
+      fi
     elif [[ -s $TEMP_DIR/client/package.json && -s $TEMP_DIR/client/package-lock.json && -s $TEMP_DIR/server/package.json && -s $TEMP_DIR/server/package-lock.json ]]; then
       APP_MODE="split"
       step "Instaluji závislosti klienta"
