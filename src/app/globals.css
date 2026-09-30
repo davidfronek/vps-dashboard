@@ -184,3 +184,5 @@ footer { display: flex; justify-content: space-between; padding: 21px 3px 0; col
   .todo-item { grid-template-columns: 28px minmax(0, 1fr); }
   .todo-actions { grid-column: 2; justify-content: flex-start; }
 }
+
+.application-database-summary { grid-template-columns: 29px minmax(0, 1fr) auto auto 28px; }
