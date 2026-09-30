@@ -17,6 +17,7 @@ const HISTORY_WINDOW_MS = 24 * 60 * 60 * 1_000;
 const MAX_SAMPLES = HISTORY_WINDOW_MS / SAMPLE_INTERVAL_MS;
 
 let writeQueue = Promise.resolve();
+let lastSampleAttemptAt = 0;
 
 function isMetricHistorySample(value: unknown): value is MetricHistorySample {
   if (!value || typeof value !== "object") return false;
@@ -49,14 +50,16 @@ export async function getMetricHistory() {
 }
 
 export function recordMetricSample(sample: MetricHistorySample) {
+  const sampleTimestamp = Date.parse(sample.collectedAt);
+  if (sampleTimestamp - lastSampleAttemptAt < SAMPLE_INTERVAL_MS) return Promise.resolve();
+  lastSampleAttemptAt = sampleTimestamp;
+
   const operation = writeQueue.then(async () => {
     const history = await readHistory();
     const newestSample = history.at(-1);
-    if (newestSample && Date.parse(sample.collectedAt) - Date.parse(newestSample.collectedAt) < SAMPLE_INTERVAL_MS) {
-      return history;
-    }
+    if (newestSample && sampleTimestamp - Date.parse(newestSample.collectedAt) < SAMPLE_INTERVAL_MS) return;
 
-    const cutoff = Date.parse(sample.collectedAt) - HISTORY_WINDOW_MS;
+    const cutoff = sampleTimestamp - HISTORY_WINDOW_MS;
     const nextHistory = [...history.filter((entry) => Date.parse(entry.collectedAt) >= cutoff), sample].slice(-MAX_SAMPLES);
     await mkdir(dirname(HISTORY_FILE), { recursive: true });
     const temporaryFile = `${HISTORY_FILE}.${process.pid}.${Date.now()}.tmp`;

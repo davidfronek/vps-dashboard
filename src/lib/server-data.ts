@@ -273,11 +273,15 @@ export async function getServerSnapshot(): Promise<ServerSnapshot> {
   const postgresOnline = serviceState("postgresql");
   const appOnline = serviceState("vps-app-onremote-cz");
   const collectedAt = new Date().toISOString();
-  await recordMetricSample({
-    collectedAt,
-    cpuPercent: loadPercent,
-    memoryPercent,
-  });
+  try {
+    await recordMetricSample({
+      collectedAt,
+      cpuPercent: loadPercent,
+      memoryPercent,
+    });
+  } catch (error) {
+    console.error("Failed to record metric history", error instanceof Error ? error.message : error);
+  }
 
   return {
     collectedAt,

@@ -37,6 +37,7 @@ APP_DIR="/srv/apps/$DOMAIN"
 SERVICE_NAME="vps-app-$APP_SLUG"
 NGINX_CONFIG="/etc/nginx/sites-available/$DOMAIN"
 ENV_FILE="/var/lib/vps-dashboard/apps/$DOMAIN.env"
+METRICS_DIR="/var/lib/vps-dashboard/metrics"
 
 
 NPM_BIN="$(command -v npm)"
@@ -65,6 +66,8 @@ cd "$APP_DIR"
 npm ci
 npm run build
 chown -R www-data:www-data "$APP_DIR"
+install -d -o root -g www-data -m 0750 /var/lib/vps-dashboard
+install -d -o www-data -g www-data -m 0750 "$METRICS_DIR"
 
 cat > "/etc/systemd/system/$SERVICE_NAME.service" <<EOF
 [Unit]

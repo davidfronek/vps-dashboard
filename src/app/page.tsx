@@ -3,7 +3,6 @@ import { redirect } from "next/navigation";
 import { connection } from "next/server";
 import Dashboard from "./dashboard";
 import { getSession } from "@/lib/auth";
-import { getMetricHistory } from "@/lib/metric-history-store";
 import { getServerSnapshot } from "@/lib/server-data";
 
 export function StarterTemplate() {
@@ -79,6 +78,5 @@ export default async function Home() {
   const session = await getSession();
   if (!session) redirect("/login");
   const snapshot = await getServerSnapshot();
-  const metricHistory = await getMetricHistory();
-  return <Dashboard adminUsername={session.username} snapshot={snapshot} metricHistory={metricHistory} />;
+  return <Dashboard adminUsername={session.username} snapshot={snapshot} />;
 }

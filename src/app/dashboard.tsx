@@ -154,10 +154,10 @@ function SettingsView({ notify }: { notify: (message: string) => void }) {
   </>;
 }
 
-export default function Dashboard({ adminUsername, snapshot: initialSnapshot, metricHistory: initialMetricHistory }: { adminUsername: string; snapshot: ServerSnapshot; metricHistory: MetricHistorySample[] }) {
+export default function Dashboard({ adminUsername, snapshot: initialSnapshot }: { adminUsername: string; snapshot: ServerSnapshot }) {
   const router = useRouter();
   const [snapshot, setSnapshot] = useState(initialSnapshot);
-  const [metricHistory, setMetricHistory] = useState(initialMetricHistory);
+  const [metricHistory, setMetricHistory] = useState<MetricHistorySample[]>([]);
   const [metricHistoryError, setMetricHistoryError] = useState("");
   const [activeSection, setActiveSection] = useState("Přehled");
   const domains: Domain[] = snapshot.domains;

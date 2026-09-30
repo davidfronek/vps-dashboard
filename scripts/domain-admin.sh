@@ -575,6 +575,8 @@ EOF
       SERVICE_WORKING_DIRECTORY="$APP_DIR"
       SERVICE_EXEC_START="$(command -v npm) start -- --port $PORT"
     fi
+    install -d -o root -g www-data -m 0750 "$STATE_DIR"
+    install -d -o www-data -g www-data -m 0750 "$STATE_DIR/metrics"
     cat > "$SERVICE_FILE" <<EOF
 [Unit]
 Description=Web application for $DOMAIN
