@@ -12,6 +12,10 @@ ADMIN_PASSWORD_HASH=scrypt:<salt-v-hexu>:<hash-v-hexu>
 AUTH_SECRET=vygenerujte-alespon-32-nahodnych-znaku
 ```
 
+Historie vytížení CPU a paměti se ukládá jednou za minutu a uchovává se 24 hodin.
+V produkci je soubor uložen v `/var/lib/vps-dashboard/metrics/history.json`,
+lokálně v `.data/metric-history.json`.
+
 Heslo musí mít alespoň 12 znaků. Uložte pouze jeho salted `scrypt` hash ve formátu uvedeném výše, nikoli čitelné heslo.
 
 Pro vygenerování tajemství v PowerShellu lze použít:

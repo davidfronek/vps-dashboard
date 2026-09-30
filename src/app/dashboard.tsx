@@ -13,8 +13,10 @@ import DomainEnvironmentEditor from "./domain-environment-editor";
 import TodoView from "./todo-view";
 import UsersView from "./users-view";
 import AdminJobProgress, { runAdminJob } from "./admin-job-progress";
+import MetricHistoryChart from "./metric-history-chart";
 import { logout } from "./auth-actions";
 import type { AdminJob } from "@/lib/admin-job-types";
+import type { MetricHistorySample } from "@/lib/metric-history-store";
 import type { ServerSnapshot } from "@/lib/server-data";
 import type { TodoItem } from "@/lib/todo-types";
 
@@ -152,9 +154,11 @@ function SettingsView({ notify }: { notify: (message: string) => void }) {
   </>;
 }
 
-export default function Dashboard({ adminUsername, snapshot: initialSnapshot }: { adminUsername: string; snapshot: ServerSnapshot }) {
+export default function Dashboard({ adminUsername, snapshot: initialSnapshot, metricHistory: initialMetricHistory }: { adminUsername: string; snapshot: ServerSnapshot; metricHistory: MetricHistorySample[] }) {
   const router = useRouter();
   const [snapshot, setSnapshot] = useState(initialSnapshot);
+  const [metricHistory, setMetricHistory] = useState(initialMetricHistory);
+  const [metricHistoryError, setMetricHistoryError] = useState("");
   const [activeSection, setActiveSection] = useState("Přehled");
   const domains: Domain[] = snapshot.domains;
   const [query, setQuery] = useState("");
@@ -193,6 +197,30 @@ export default function Dashboard({ adminUsername, snapshot: initialSnapshot }: 
     }
     const interval = window.setInterval(refreshSnapshot, 2_000);
     void refreshSnapshot();
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    async function refreshMetricHistory() {
+      if (document.visibilityState === "hidden") return;
+      try {
+        const response = await fetch("/api/metric-history", { cache: "no-store" });
+        if (!response.ok) throw new Error("Historii vytížení se nepodařilo načíst.");
+        const result = await response.json() as { metricHistory: MetricHistorySample[] };
+        if (active) {
+          setMetricHistory(result.metricHistory);
+          setMetricHistoryError("");
+        }
+      } catch {
+        if (active) setMetricHistoryError("Historii vytížení se nepodařilo načíst.");
+      }
+    }
+    const interval = window.setInterval(refreshMetricHistory, 60_000);
+    void refreshMetricHistory();
     return () => {
       active = false;
       window.clearInterval(interval);
@@ -308,6 +336,15 @@ export default function Dashboard({ adminUsername, snapshot: initialSnapshot }: 
           {activeSection === "Nastavení" ? <SettingsView notify={notify} /> : activeSection === "Úkoly" ? <TodoView notify={notify} onActiveCountChange={setActiveTodoCount} /> : activeSection === "Databáze" ? <DatabaseView databases={snapshot.databases} applications={groupedDomains.filter((domain) => domain.deployment)} onRefresh={() => router.refresh()} runJob={executeJob} /> : activeSection === "Uživatelé" ? <UsersView users={snapshot.users} onRefresh={() => router.refresh()} runJob={executeJob} /> : <>
           <section className="page-heading"><div><div className={snapshot.services.every((service) => service.state !== "Nedostupné") ? "eyebrow neutral" : "eyebrow issue"}><span className={snapshot.services.every((service) => service.state !== "Nedostupné") ? "status-dot success" : "status-dot issue"} /> {snapshot.services.every((service) => service.state !== "Nedostupné") ? "Všechny sledované služby jsou dostupné a běží" : "Některá služba vyžaduje pozornost"}</div><h1>Onremote.cz</h1><p>Živý stav z {new Date(snapshot.collectedAt).toLocaleString("cs-CZ")}.</p></div><div className="heading-actions"><button className="secondary-button" onClick={() => router.refresh()}><RefreshCw size={17} /> Obnovit</button><button className="primary-button" onClick={openNewDomain}><Plus size={17} /> Přidat doménu</button></div></section>
           <section className="metrics-grid" aria-label="Využití serveru">{snapshot.metrics.map(({ label, value, detail, tone, usagePercent }, index) => { const Icon = metricIcons[index]; const circumference = 2 * Math.PI * 30; const utilizationTone = usagePercent === undefined ? "" : usagePercent <= 30 ? "low" : usagePercent <= 75 ? "medium" : "high"; return <article className="metric-card" key={label}><span className={`metric-icon ${tone}`}><Icon size={19} /></span><div><span>{label}</span><strong>{value}</strong><small>{detail}</small></div>{usagePercent !== undefined && <div className={`utilization-chart ${utilizationTone}`} role="img" aria-label={`${label}: ${usagePercent} %`}><svg viewBox="0 0 72 72" aria-hidden="true"><circle className="utilization-track" cx="36" cy="36" r="30" /><circle className="utilization-value" cx="36" cy="36" r="30" strokeDasharray={circumference} strokeDashoffset={circumference * (1 - usagePercent / 100)} /></svg><span>{usagePercent}<small>%</small></span></div>}</article>; })}</section>
+
+          <section className="panel metric-history-panel" aria-label="Historie vytížení">
+            <div className="panel-header"><div><h2>Vytížení v čase</h2><p>Historie hodnot CPU a operační paměti · uchovává se 24 hodin</p></div><span className="audit-time">Interval 1 min</span></div>
+            {metricHistoryError && <p className="metric-history-error" role="alert">{metricHistoryError}</p>}
+            <div className="metric-history-grid">
+              <MetricHistoryChart label="Zátěž CPU" samples={metricHistory} metric="cpuPercent" />
+              <MetricHistoryChart label="Operační paměť" samples={metricHistory} metric="memoryPercent" />
+            </div>
+          </section>
 
           <div className="overview-grid">
             <section className="panel performance-panel">

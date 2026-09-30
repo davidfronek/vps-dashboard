@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, readdirSync, statfsSync } from "node:fs";
 import { networkInterfaces, cpus, freemem, hostname, loadavg, platform, release, totalmem, uptime } from "node:os";
 import { parse } from "node:path";
+import { recordMetricSample } from "@/lib/metric-history-store";
 
 export type Metric = {
   label: string;
@@ -256,7 +257,7 @@ function readUsers(): SystemUser[] {
   }
 }
 
-export function getServerSnapshot(): ServerSnapshot {
+export async function getServerSnapshot(): Promise<ServerSnapshot> {
   const cpuCount = cpus().length;
   const loadPercent = readCpuPercent();
   const totalMemory = totalmem();
@@ -271,9 +272,15 @@ export function getServerSnapshot(): ServerSnapshot {
   const nginxOnline = serviceState("nginx");
   const postgresOnline = serviceState("postgresql");
   const appOnline = serviceState("vps-app-onremote-cz");
+  const collectedAt = new Date().toISOString();
+  await recordMetricSample({
+    collectedAt,
+    cpuPercent: loadPercent,
+    memoryPercent,
+  });
 
   return {
-    collectedAt: new Date().toISOString(),
+    collectedAt,
     metrics: [
       { label: "Zátěž CPU", value: `${loadPercent} %`, detail: `${cpuCount} vCPU · živě`, tone: "blue", usagePercent: loadPercent },
       { label: "Operační paměť", value: formatBytes(usedMemory), detail: `z ${formatBytes(totalMemory)}`, tone: "green", usagePercent: memoryPercent },
