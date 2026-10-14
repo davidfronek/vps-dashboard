@@ -14,7 +14,7 @@ const DATABASE_NAME = /^[a-z][a-z0-9_]{0,62}$/;
 const OPERATIONS = new Set<AdminOperation>([
   "domain-upsert", "domain-deploy", "domain-renew", "domain-delete",
   "user-create", "user-update", "user-delete",
-  "database-create", "database-delete",
+  "database-create", "database-delete", "server-restart",
 ]);
 
 function validFlag(value: string) {
@@ -30,6 +30,7 @@ function validRequest(value: unknown): value is AdminJobRequest {
   const request = value as AdminJobRequest;
   if (!OPERATIONS.has(request.operation) || !Array.isArray(request.arguments) || !request.arguments.every((argument) => typeof argument === "string")) return false;
   const [subject, ...args] = request.arguments;
+  if (request.operation === "server-restart") return request.arguments.length === 0;
   if (request.operation.startsWith("domain-")) {
     if (!subject || !DOMAIN.test(subject) || !subject.includes(".") || subject.includes("..")) return false;
     if (request.operation === "domain-upsert") return args.length === 3 && args.every(validFlag);

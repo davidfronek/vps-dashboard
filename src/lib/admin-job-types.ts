@@ -7,7 +7,8 @@ export type AdminOperation =
   | "user-update"
   | "user-delete"
   | "database-create"
-  | "database-delete";
+  | "database-delete"
+  | "server-restart";
 
 export type AdminJobRequest = {
   operation: AdminOperation;

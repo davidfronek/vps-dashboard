@@ -41,6 +41,7 @@ job_title() {
     user-delete) echo "Odstranění uživatele $2" ;;
     database-create) echo "Vytvoření PostgreSQL databáze $2" ;;
     database-delete) echo "Odstranění PostgreSQL databáze $2" ;;
+    server-restart) echo "Restart serveru" ;;
     *) echo "Správa serveru" ;;
   esac
 }
@@ -99,7 +100,7 @@ if [[ $ACTION == "enqueue" ]]; then
   OPERATION="${3:-}"
   shift 3
   [[ $JOB_ID =~ ^[a-f0-9]{32}$ ]] || { echo "Invalid job id." >&2; exit 1; }
-  [[ $OPERATION =~ ^(domain-(upsert|deploy|renew|delete)|user-(create|update|delete)|database-(create|delete))$ ]] || { echo "Unsupported operation." >&2; exit 1; }
+  [[ $OPERATION =~ ^(domain-(upsert|deploy|renew|delete)|user-(create|update|delete)|database-(create|delete)|server-restart)$ ]] || { echo "Unsupported operation." >&2; exit 1; }
   install -d -o root -g www-data -m 0750 "$JOB_DIR" "$APP_STATE_DIR" "$USER_STATE_DIR" "$DATABASE_STATE_DIR" "$LOCK_DIR"
   find "$JOB_DIR" -type f -mtime +7 -delete
   JOB_FILE="$JOB_DIR/$JOB_ID"
@@ -724,6 +725,10 @@ EOF
       runuser -u postgres -- dropuser --if-exists -- "$OWNER"
     fi
     rm -f "$DATABASE_STATE_DIR/$DATABASE"
+    ;;
+  server-restart)
+    step "Plánuji restart serveru za 5 sekund"
+    systemd-run --quiet --collect --on-active=5s systemctl reboot
     ;;
   *)
     echo "Unsupported action." >&2
