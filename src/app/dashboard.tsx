@@ -7,6 +7,14 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { FormEvent, useEffect, useRef, useState } from "react";
+
+// Server umí statický web (Nginx) a Node.js aplikace nasazované z GitHubu (npm start za proxy).
+const APP_TECHNOLOGIES = [
+  { id: "static", label: "Statický web", description: "HTML/CSS/JS soubory, které nahrajete do /srv/apps/doména.", available: true },
+  { id: "nodejs", label: "Node.js", description: "Aplikace nasazená z GitHub repozitáře.", available: true },
+  { id: "php", label: "PHP", description: "", available: false },
+  { id: "python", label: "Python", description: "", available: false },
+];
 import { useRouter } from "next/navigation";
 import DatabaseView from "./database-view";
 import DomainEnvironmentEditor from "./domain-environment-editor";
@@ -163,11 +171,16 @@ export default function Dashboard({ adminUsername, snapshot: initialSnapshot }: 
   const domains: Domain[] = snapshot.domains;
   const [query, setQuery] = useState("");
   const [modalOpen, setModalOpen] = useState(false);
+  const [appTechnology, setAppTechnology] = useState("static");
   const [newDomainName, setNewDomainName] = useState("");
-  const [githubDeploy, setGithubDeploy] = useState(false);
+  const githubDeploy = appTechnology === "nodejs";
   const [githubRepository, setGithubRepository] = useState("");
   const [githubBranch, setGithubBranch] = useState("main");
   const [deploymentPort, setDeploymentPort] = useState(() => getAvailableDeploymentPort(initialSnapshot.domains));
+  const [createDatabase, setCreateDatabase] = useState(false);
+  const [databaseName, setDatabaseName] = useState("");
+  const [databaseOwner, setDatabaseOwner] = useState("");
+  const [databasePassword, setDatabasePassword] = useState("");
   const [domainToDelete, setDomainToDelete] = useState<string | null>(null);
   const [domainSettings, setDomainSettings] = useState<DomainSettings | null>(null);
   const [editGithubDeploy, setEditGithubDeploy] = useState(false);
@@ -273,6 +286,22 @@ export default function Dashboard({ adminUsername, snapshot: initialSnapshot }: 
     setModalOpen(true);
   }
 
+  function toggleCreateDatabase() {
+    if (!createDatabase) {
+      const base = `${/^[a-z]/.test(newDomainName.toLowerCase()) ? "" : "db_"}${newDomainName.toLowerCase().split(".").slice(0, -1).join("_").replace(/[^a-z0-9_]/g, "_")}`.slice(0, 60);
+      if (!databaseName) setDatabaseName(base);
+      if (!databaseOwner) setDatabaseOwner(base);
+      if (!databasePassword) generateDatabasePassword();
+    }
+    setCreateDatabase((value) => !value);
+  }
+
+  function generateDatabasePassword() {
+    const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+    const bytes = crypto.getRandomValues(new Uint8Array(24));
+    setDatabasePassword(Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join(""));
+  }
+
   async function addDomain(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const name = String(new FormData(event.currentTarget).get("domain") ?? "").trim();
@@ -285,9 +314,15 @@ export default function Dashboard({ adminUsername, snapshot: initialSnapshot }: 
         : [name, "1", wwwRedirect, "1"],
     });
     if (succeeded) {
+      const database = createDatabase ? { name: databaseName, owner: databaseOwner, password: databasePassword } : null;
+      setCreateDatabase(false);
+      setDatabaseName("");
+      setDatabaseOwner("");
+      setDatabasePassword("");
+      if (database) await executeJob(`Vytvoření PostgreSQL databáze ${database.name}`, { operation: "database-create", arguments: [database.name, database.owner, database.password] });
       setModalOpen(false);
       setNewDomainName("");
-      setGithubDeploy(false);
+      setAppTechnology("static");
       setGithubRepository("");
       setGithubBranch("main");
       setDeploymentPort(getAvailableDeploymentPort(domains));
@@ -366,7 +401,7 @@ export default function Dashboard({ adminUsername, snapshot: initialSnapshot }: 
         </div>
       </main>
 
-      {modalOpen && <div className="modal-backdrop" role="presentation" onMouseDown={() => setModalOpen(false)}><div className="modal deploy-modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" onMouseDown={(event) => event.stopPropagation()}><div className="modal-icon"><Globe2 size={21} /></div><button className="modal-close" onClick={() => setModalOpen(false)} aria-label="Zavřít"><X size={19} /></button><h2 id="modal-title">Přidat novou doménu</h2><p>Nasměrujte doménu na tento server a volitelně ji propojte s GitHub repozitářem.</p><form onSubmit={addDomain}><label htmlFor="domain">Název domény nebo subdomény</label><input id="domain" name="domain" type="text" placeholder="např. app.mujweb.cz" pattern="[a-zA-Z0-9](?:[a-zA-Z0-9.\-]*[a-zA-Z0-9])?" value={newDomainName} onChange={(event) => setNewDomainName(event.target.value)} autoFocus required /><div className="dns-note"><Zap size={17} /><span>DNS A záznam nastavte na <strong>46.28.108.112</strong></span></div><div className="deploy-toggle"><div><strong><GitBranch size={16} /> Nasazovat z GitHubu</strong><small>Repozitář se připraví k prvnímu nasazení na lokální port.</small></div><Toggle checked={githubDeploy} onChange={() => setGithubDeploy((value) => !value)} label="Nasazovat z GitHubu" /></div>{githubDeploy && <div className="deploy-fields"><label htmlFor="github-repository">HTTPS adresa repozitáře</label><input id="github-repository" type="url" value={githubRepository} onChange={(event) => setGithubRepository(event.target.value)} placeholder="https://github.com/uzivatel/repozitar.git" pattern="https://github\.com/.+/.+(?:\.git)?" required /><small className="field-help">Pro soukromý repozitář nastavte deploy key přímo na serveru. Token se zde neukládá.</small><div className="deploy-grid"><label htmlFor="github-branch"><span>Větev</span><input id="github-branch" value={githubBranch} onChange={(event) => setGithubBranch(event.target.value)} pattern="[A-Za-z0-9._/\-]+" required /></label><label htmlFor="deployment-port"><span>Lokální port</span><input id="deployment-port" type="number" min="1024" max="65535" value={deploymentPort} onChange={(event) => setDeploymentPort(Number(event.target.value))} required /></label></div></div>}<div className="modal-actions"><button type="button" onClick={() => setModalOpen(false)}>Zrušit</button><button type="submit" className="primary-button">Přidat doménu</button></div></form></div></div>}
+      {modalOpen && <div className="modal-backdrop" role="presentation" onMouseDown={() => setModalOpen(false)}><div className="modal deploy-modal" role="dialog" aria-modal="true" aria-labelledby="modal-title" onMouseDown={(event) => event.stopPropagation()}><div className="modal-icon"><Globe2 size={21} /></div><button className="modal-close" onClick={() => setModalOpen(false)} aria-label="Zavřít"><X size={19} /></button><h2 id="modal-title">Přidat novou doménu</h2><p>Nasměrujte doménu na tento server a vyberte, co na ní poběží.</p><form onSubmit={addDomain}><label htmlFor="domain">Název domény nebo subdomény</label><input id="domain" name="domain" type="text" placeholder="např. app.mujweb.cz" pattern="[a-zA-Z0-9](?:[a-zA-Z0-9.\-]*[a-zA-Z0-9])?" value={newDomainName} onChange={(event) => setNewDomainName(event.target.value)} autoFocus required /><div className="dns-note"><Zap size={17} /><span>DNS A záznam nastavte na <strong>46.28.108.112</strong></span></div><div className="deploy-fields"><span className="field-label" id="app-technology-label">Co na doméně poběží?</span><div className="deploy-grid" role="radiogroup" aria-labelledby="app-technology-label">{APP_TECHNOLOGIES.map((technology) => <label key={technology.id} title={technology.available ? technology.description : "Na serveru zatím není podporováno"} style={technology.available ? undefined : { opacity: 0.5, cursor: "not-allowed" }}><span><input type="radio" name="app-technology" value={technology.id} checked={appTechnology === technology.id} disabled={!technology.available} onChange={() => setAppTechnology(technology.id)} style={{ width: "auto", marginRight: 6 }} />{technology.label}{technology.available ? "" : " (nedostupné)"}</span></label>)}</div><small className="field-help">{APP_TECHNOLOGIES.find((technology) => technology.id === appTechnology)?.description}</small></div>{githubDeploy && <div className="deploy-fields"><label htmlFor="github-repository">HTTPS adresa repozitáře</label><input id="github-repository" type="url" value={githubRepository} onChange={(event) => setGithubRepository(event.target.value)} placeholder="https://github.com/uzivatel/repozitar.git" pattern="https://github\.com/.+/.+(?:\.git)?" required /><small className="field-help">Pro soukromý repozitář nastavte deploy key přímo na serveru. Token se zde neukládá.</small><div className="deploy-grid"><label htmlFor="github-branch"><span>Větev</span><input id="github-branch" value={githubBranch} onChange={(event) => setGithubBranch(event.target.value)} pattern="[A-Za-z0-9._/\-]+" required /></label><label htmlFor="deployment-port"><span>Lokální port</span><input id="deployment-port" type="number" min="1024" max="65535" value={deploymentPort} onChange={(event) => setDeploymentPort(Number(event.target.value))} required /></label></div></div>}<div className="deploy-toggle"><div><strong><Database size={16} /> Založit PostgreSQL databázi</strong><small>Po nastavení domény se vytvoří databáze a samostatný uživatel.</small></div><Toggle checked={createDatabase} onChange={toggleCreateDatabase} label="Založit databázi" /></div>{createDatabase && <div className="deploy-fields"><div className="deploy-grid"><label htmlFor="new-database-name"><span>Název databáze</span><input id="new-database-name" value={databaseName} onChange={(event) => setDatabaseName(event.target.value)} pattern="[a-z][a-z0-9_]{0,62}" required /></label><label htmlFor="new-database-owner"><span>Databázový uživatel</span><input id="new-database-owner" value={databaseOwner} onChange={(event) => setDatabaseOwner(event.target.value)} pattern="[a-z][a-z0-9_]{0,62}" required /></label></div><label htmlFor="new-database-password">Heslo</label><input id="new-database-password" value={databasePassword} onChange={(event) => setDatabasePassword(event.target.value)} minLength={12} maxLength={128} autoComplete="off" required /><button type="button" onClick={generateDatabasePassword}>Vygenerovat heslo</button><small className="field-help">Heslo si uložte, po vytvoření se již nezobrazí.</small></div>}<div className="modal-actions"><button type="button" onClick={() => setModalOpen(false)}>Zrušit</button><button type="submit" className="primary-button">Přidat doménu</button></div></form></div></div>}
       {domainSettings && <div className="modal-backdrop" role="presentation" onMouseDown={() => setDomainSettings(null)}><div className="modal domain-settings-modal" role="dialog" aria-modal="true" aria-labelledby="domain-settings-title" onMouseDown={(event) => event.stopPropagation()}><div className="modal-icon"><Settings size={21} /></div><button className="modal-close" onClick={() => setDomainSettings(null)} aria-label="Zavřít"><X size={19} /></button><h2 id="domain-settings-title">Nastavení domény</h2><p>{domainSettings.names.join(" · ")}</p><form className="domain-settings-form" onSubmit={saveDomainSettings}><div className="deploy-toggle"><div><strong><GitBranch size={16} /> Nasazovat z GitHubu</strong><small>Repozitář lze připojit nebo změnit i u existující domény.</small></div><Toggle checked={editGithubDeploy} onChange={() => setEditGithubDeploy((value) => !value)} label="Nasazovat z GitHubu" /></div>{editGithubDeploy ? <div className="deploy-fields"><label htmlFor="edit-github-repository">HTTPS adresa repozitáře</label><input id="edit-github-repository" type="url" value={editGithubRepository} onChange={(event) => setEditGithubRepository(event.target.value)} placeholder="https://github.com/uzivatel/repozitar.git" pattern="https://github\.com/.+/.+(?:\.git)?" required /><div className="deploy-grid"><label htmlFor="edit-github-branch"><span>Větev</span><input id="edit-github-branch" value={editGithubBranch} onChange={(event) => setEditGithubBranch(event.target.value)} pattern="[A-Za-z0-9._/\-]+" required /></label><label htmlFor="edit-deployment-port"><span>Lokální port</span><input id="edit-deployment-port" type="number" min="1024" max="65535" value={editDeploymentPort} onChange={(event) => setEditDeploymentPort(Number(event.target.value))} required /></label></div></div> : <><label htmlFor="domain-target">Cílová adresa</label><input id="domain-target" name="target" defaultValue={groupedDomains.find((domain) => domain.key === domainSettings.key)?.target} placeholder="127.0.0.1:3000" required /><small className="field-help">IP adresa nebo lokální upstream včetně portu.</small></>}<div className="domain-setting-row"><div><strong>Automatické SSL</strong><small>Vystavit a obnovovat certifikát přes Let&apos;s Encrypt.</small></div><Toggle checked={domainSettings.automaticSsl} onChange={() => setDomainSettings((current) => current ? { ...current, automaticSsl: !current.automaticSsl } : current)} label="Automatické SSL" /></div><div className="domain-setting-row"><div><strong>Vynutit HTTPS</strong><small>Přesměrovat všechny HTTP požadavky na HTTPS.</small></div><Toggle checked={domainSettings.forceHttps} onChange={() => setDomainSettings((current) => current ? { ...current, forceHttps: !current.forceHttps } : current)} label="Vynutit HTTPS" /></div>{domainSettings.names.length > 1 && <div className="domain-setting-row"><div><strong>Přesměrovat www</strong><small>Směrovat www variantu na hlavní doménu.</small></div><Toggle checked={domainSettings.wwwRedirect} onChange={() => setDomainSettings((current) => current ? { ...current, wwwRedirect: !current.wwwRedirect } : current)} label="Přesměrovat www" /></div>}<div className="certificate-card"><span className="server-icon"><ShieldCheck size={17} /></span><div><strong>SSL certifikát</strong><small>{domainSettings.ssl === "Aktivní" ? `Aktivní pro ${domainSettings.names.length} ${domainSettings.names.length === 1 ? "hostname" : "hostnames"}` : "Čeká na ověření DNS"}</small></div><button type="button" onClick={renewCertificate}>Obnovit</button></div><div className="modal-actions"><button type="button" onClick={() => setDomainSettings(null)}>Zrušit</button><button type="submit" className="primary-button"><Check size={16} /> Uložit změny</button></div></form>{editGithubDeploy && <DomainEnvironmentEditor key={domainSettings.key} domain={domainSettings.key} initialKeys={domainSettings.environmentKeys} onSaved={notify} />}</div></div>}
       {domainForDeletion && <div className="modal-backdrop" role="presentation" onMouseDown={() => setDomainToDelete(null)}><div className="modal delete-modal" role="alertdialog" aria-modal="true" aria-labelledby="delete-title" aria-describedby="delete-description" onMouseDown={(event) => event.stopPropagation()}><div className="modal-icon danger"><Trash2 size={21} /></div><button className="modal-close" onClick={() => setDomainToDelete(null)} aria-label="Zavřít"><X size={19} /></button><h2 id="delete-title">Odstranit doménu a aplikaci?</h2><p id="delete-description">Doména <strong>{domainForDeletion.names.join(" a ")}</strong>, její systemd služba, certifikát a data v <strong>/srv/apps/{domainForDeletion.key}</strong> budou trvale odstraněny.</p><div className="modal-actions"><button type="button" onClick={() => setDomainToDelete(null)}>Zrušit</button><button type="button" className="danger-button" onClick={deleteDomain}>Trvale odstranit</button></div></div></div>}
       {adminJob && <AdminJobProgress job={adminJob} onClose={() => setAdminJob(null)} />}
