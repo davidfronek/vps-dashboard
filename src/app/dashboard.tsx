@@ -356,12 +356,17 @@ export default function Dashboard({ adminUsername, snapshot: initialSnapshot }: 
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ domain, repository, branch, port: String(port) }),
       });
-      const data: { created?: boolean; message?: string } | null = await response.json().catch(() => null);
+      const data: { created?: boolean; secretsSet?: boolean | null; message?: string } | null = await response.json().catch(() => null);
       if (!response.ok) {
         notify(data?.message ?? "Deploy workflow se nepodařilo vytvořit.");
         return;
       }
-      notify(data?.created ? "Deploy workflow byl přidán do repozitáře" : "Deploy workflow už v repozitáři existuje");
+      if (data?.secretsSet === false) {
+        notify("Workflow přidán, ale repo secrets se nepodařilo nastavit – doplňte je ručně.");
+        return;
+      }
+      const secretsNote = data?.secretsSet ? " včetně repo secrets" : "";
+      notify(data?.created ? `Deploy workflow byl přidán do repozitáře${secretsNote}` : "Deploy workflow už v repozitáři existuje");
     } catch {
       notify("Deploy workflow se nepodařilo vytvořit.");
     }
