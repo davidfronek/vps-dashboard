@@ -44,7 +44,7 @@ function validRequest(value: unknown): value is AdminJobRequest {
     return args.length === 0;
   }
   if (!subject || !DATABASE_NAME.test(subject)) return false;
-  if (request.operation === "database-create") return args.length === 3 && DATABASE_NAME.test(args[0]) && DATABASE_NAME.test(args[1]) && args[2].length >= 12 && args[2].length <= 128;
+  if (request.operation === "database-create") return args.length === 2 && DATABASE_NAME.test(args[0]) && args[1].length >= 12 && args[1].length <= 128;
   return request.operation === "database-delete" && args.length === 0;
 }
 
