@@ -16,6 +16,7 @@ jobs:
         username: ${{ secrets.SSH_USER }}
         key: ${{ secrets.SSH_KEY }}
         port: ${{ secrets.SSH_PORT }}
+        command_timeout: 40m
         script: |
           set -Eeuo pipefail
 
