@@ -24,7 +24,7 @@ export type DomainStatus = {
   name: string;
   target: string;
   ssl: "Aktivní" | "Neaktivní";
-  status: "Online" | "Nedostupné" | "Přesměrování";
+  status: "Online" | "Nedostupné" | "Přesměrování" | "Pozastaveno";
   automaticSsl: boolean;
   forceHttps: boolean;
   wwwRedirect: boolean;
@@ -215,7 +215,7 @@ function readDomains(): DomainStatus[] {
           name,
           target,
           ssl: hasTls ? "Aktivní" : "Neaktivní",
-          status: target === "Přesměrování" ? "Přesměrování" : listening ? "Online" : "Nedostupné",
+          status: existsSync(`/etc/nginx/vps-dashboard-paused/${managedName}/paused.conf`) ? "Pozastaveno" : target === "Přesměrování" ? "Přesměrování" : listening ? "Online" : "Nedostupné",
           automaticSsl: config.includes("managed by Certbot") || config.includes("/etc/letsencrypt/"),
           forceHttps: redirectsToHttps,
           wwwRedirect: name.startsWith("www.") && target === "Přesměrování",

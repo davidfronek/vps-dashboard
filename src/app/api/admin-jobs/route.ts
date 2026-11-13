@@ -12,7 +12,7 @@ const USERNAME = /^[a-z_][a-z0-9_-]{0,30}$/;
 const SSH_KEY = /^ssh-(?:ed25519|rsa) [A-Za-z0-9+/=]+(?: .*)?$/;
 const DATABASE_NAME = /^[a-z][a-z0-9_]{0,62}$/;
 const OPERATIONS = new Set<AdminOperation>([
-  "domain-upsert", "domain-deploy", "domain-renew", "domain-delete",
+  "domain-upsert", "domain-deploy", "domain-renew", "domain-delete", "domain-pause", "domain-resume",
   "user-create", "user-update", "user-delete",
   "database-create", "database-delete", "server-restart",
 ]);
@@ -33,6 +33,7 @@ function validRequest(value: unknown): value is AdminJobRequest {
   if (request.operation === "server-restart") return request.arguments.length === 0;
   if (request.operation.startsWith("domain-")) {
     if (!subject || !DOMAIN.test(subject) || !subject.includes(".") || subject.includes("..")) return false;
+    if ((request.operation === "domain-pause" || request.operation === "domain-resume") && subject.replace(/^www\./, "") === "onremote.cz") return false;
     if (request.operation === "domain-upsert") return args.length === 3 && args.every(validFlag);
     if (request.operation === "domain-deploy") return args.length === 6 && REPOSITORY.test(args[0]) && BRANCH.test(args[1]) && validPort(args[2]) && args.slice(3).every(validFlag);
     return args.length === 0;

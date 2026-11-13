@@ -39,6 +39,9 @@ NGINX_CONFIG="/etc/nginx/sites-available/$DOMAIN"
 ENV_FILE="/var/lib/vps-dashboard/apps/$DOMAIN.env"
 METRICS_DIR="/var/lib/vps-dashboard/metrics"
 
+install -d -o root -g root -m 0755 /var/lib/vps-dashboard/locks
+exec 8>/var/lib/vps-dashboard/locks/nginx-domains.lock
+flock --wait 600 8
 
 NPM_BIN="$(command -v npm)"
 SSH_REPOSITORY="git@github.com:${REPOSITORY#https://github.com/}"
@@ -108,6 +111,7 @@ server {
 }
 EOF
 
+node /usr/local/lib/vps-dashboard/domain-availability.mjs guard "$DOMAIN" "$NGINX_CONFIG"
 ln -sfn "$NGINX_CONFIG" "/etc/nginx/sites-enabled/$DOMAIN"
 nginx -t
 systemctl daemon-reload

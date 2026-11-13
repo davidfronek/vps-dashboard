@@ -3,6 +3,8 @@ export type AdminOperation =
   | "domain-deploy"
   | "domain-renew"
   | "domain-delete"
+  | "domain-pause"
+  | "domain-resume"
   | "user-create"
   | "user-update"
   | "user-delete"

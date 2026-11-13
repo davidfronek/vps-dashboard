@@ -36,6 +36,8 @@ job_title() {
     domain-deploy) echo "Nasazení aplikace $2" ;;
     domain-renew) echo "Obnova SSL certifikátu $2" ;;
     domain-delete) echo "Odstranění domény $2" ;;
+    domain-pause) echo "Pozastavení domény $2" ;;
+    domain-resume) echo "Zpřístupnění domény $2" ;;
     user-create) echo "Vytvoření uživatele $2" ;;
     user-update) echo "Změna přístupu uživatele $2" ;;
     user-delete) echo "Odstranění uživatele $2" ;;
@@ -100,7 +102,7 @@ if [[ $ACTION == "enqueue" ]]; then
   OPERATION="${3:-}"
   shift 3
   [[ $JOB_ID =~ ^[a-f0-9]{32}$ ]] || { echo "Invalid job id." >&2; exit 1; }
-  [[ $OPERATION =~ ^(domain-(upsert|deploy|renew|delete)|user-(create|update|delete)|database-(create|delete)|server-restart)$ ]] || { echo "Unsupported operation." >&2; exit 1; }
+  [[ $OPERATION =~ ^(domain-(upsert|deploy|renew|delete|pause|resume)|user-(create|update|delete)|database-(create|delete)|server-restart)$ ]] || { echo "Unsupported operation." >&2; exit 1; }
   install -d -o root -g www-data -m 0750 "$JOB_DIR" "$APP_STATE_DIR" "$USER_STATE_DIR" "$DATABASE_STATE_DIR" "$LOCK_DIR"
   find "$JOB_DIR" -type f -mtime +7 -delete
   JOB_FILE="$JOB_DIR/$JOB_ID"
@@ -316,6 +318,7 @@ server {
 EOF
   fi
 
+  node /usr/local/lib/vps-dashboard/domain-availability.mjs guard "$DOMAIN" "$config"
   ln -sfn "$config" "$NGINX_ENABLED/$DOMAIN"
   rm -f "$NGINX_ENABLED/www.$DOMAIN"
   step "Ověřuji a načítám konfiguraci Nginx"
@@ -328,6 +331,9 @@ EOF
     [[ $www_redirect == "1" ]] && certbot_args+=(-d "www.$DOMAIN")
     [[ $force_https == "1" ]] && certbot_args+=(--redirect) || certbot_args+=(--no-redirect)
     run_certbot "${certbot_args[@]}"
+    node /usr/local/lib/vps-dashboard/domain-availability.mjs guard "$DOMAIN" "$config"
+    nginx -t
+    systemctl reload nginx
   fi
 }
 
@@ -365,6 +371,7 @@ server {
 EOF
   fi
 
+  node /usr/local/lib/vps-dashboard/domain-availability.mjs guard "$DOMAIN" "$config"
   ln -sfn "$config" "$NGINX_ENABLED/$DOMAIN"
   rm -f "$NGINX_ENABLED/www.$DOMAIN"
   step "Ověřuji a načítám konfiguraci Nginx"
@@ -377,6 +384,9 @@ EOF
     [[ $www_redirect == "1" ]] && certbot_args+=(-d "www.$DOMAIN")
     [[ $force_https == "1" ]] && certbot_args+=(--redirect) || certbot_args+=(--no-redirect)
     run_certbot "${certbot_args[@]}"
+    node /usr/local/lib/vps-dashboard/domain-availability.mjs guard "$DOMAIN" "$config"
+    nginx -t
+    systemctl reload nginx
   fi
 }
 
@@ -424,6 +434,7 @@ server {
 EOF
   fi
 
+  node /usr/local/lib/vps-dashboard/domain-availability.mjs guard "$DOMAIN" "$config"
   ln -sfn "$config" "$NGINX_ENABLED/$DOMAIN"
   rm -f "$NGINX_ENABLED/www.$DOMAIN"
   step "Ověřuji a načítám konfiguraci Nginx"
@@ -436,10 +447,28 @@ EOF
     [[ $www_redirect == "1" ]] && certbot_args+=(-d "www.$DOMAIN")
     [[ $force_https == "1" ]] && certbot_args+=(--redirect) || certbot_args+=(--no-redirect)
     run_certbot "${certbot_args[@]}"
+    node /usr/local/lib/vps-dashboard/domain-availability.mjs guard "$DOMAIN" "$config"
+    nginx -t
+    systemctl reload nginx
   fi
 }
 
+# Direct deployments and dashboard jobs must not race while changing Nginx state.
 case "$ACTION" in
+  upsert|deploy|renew|delete|domain-*)
+    install -d -o root -g root -m 0755 "$LOCK_DIR"
+    exec 8>"$LOCK_DIR/nginx-domains.lock"
+    flock --wait 600 8
+    ;;
+esac
+
+case "$ACTION" in
+  domain-pause|domain-resume)
+    DOMAIN="$SUBJECT"
+    valid_domain "$DOMAIN" || { echo "Invalid domain." >&2; exit 1; }
+    step "Měním veřejnou dostupnost domény a ověřuji Nginx"
+    node /usr/local/lib/vps-dashboard/domain-availability.mjs "${ACTION#domain-}" "$DOMAIN"
+    ;;
   upsert|domain-upsert)
     DOMAIN="$SUBJECT"
     valid_domain "$DOMAIN" || { echo "Invalid domain." >&2; exit 1; }
@@ -622,6 +651,9 @@ EOF
     valid_domain "$DOMAIN" || { echo "Invalid domain." >&2; exit 1; }
     step "Obnovuji certifikát pomocí Certbotu"
     run_certbot renew --cert-name "$DOMAIN" --force-renewal --non-interactive
+    for config in "$NGINX_AVAILABLE/$DOMAIN" "$NGINX_AVAILABLE/www.$DOMAIN"; do
+      [[ ! -f $config ]] || node /usr/local/lib/vps-dashboard/domain-availability.mjs guard "$DOMAIN" "$config"
+    done
     step "Ověřuji a načítám konfiguraci Nginx"
     nginx -t
     systemctl reload nginx
@@ -641,6 +673,7 @@ EOF
     step "Odstraňuji konfiguraci a data"
     rm -rf -- "/srv/apps/$DOMAIN"
     rm -f "$APP_STATE_DIR/$DOMAIN" "$APP_STATE_DIR/$DOMAIN.env"
+    rm -f "/etc/nginx/vps-dashboard-paused/$DOMAIN/paused.conf"
     run_certbot delete --cert-name "$DOMAIN" --non-interactive 2>/dev/null || true
     systemctl daemon-reload
     step "Ověřuji a načítám konfiguraci Nginx"

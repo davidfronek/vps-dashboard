@@ -26,7 +26,33 @@ Pro vygenerování tajemství v PowerShellu lze použít:
 
 V produkci musí být aplikace dostupná pouze přes HTTPS. Přihlašovací cookie je `HttpOnly`, `SameSite=Strict` a vyprší po 8 hodinách.
 
-## Getting Started
+## Dočasné pozastavení domény
+
+V sekci **Domény** použijte u domény tlačítko **Pozastavit** (ikona pauzy) a potvrďte akci.
+Nginx bude pro doménu i její www variantu vracet HTTP 503; aplikace zůstává spuštěná.
+Data, DNS ani certifikáty se nemažou. Stav **Pozastaveno** se zachová při deployi,
+změně nastavení i restartu VPS. Tlačítkem **Zpřístupnit** (ikona přehrávání) blokaci zrušíte.
+Správcovskou doménu `onremote.cz` nelze pozastavit.
+
+Výjimkou jsou pouze cesty pro ACME ověření certifikátu, které nesměřují do aplikace.
+Již otevřená spojení (např. WebSocket) ani obsah uložený v prohlížeči tato funkce neodpojí.
+Blokace se vztahuje na Nginx; port aplikace nesmí být samostatně veřejně přístupný.
+
+Deploy dashboardu instaluje spolu se skriptem `domain-admin.sh` také
+`scripts/domain-availability.mjs` do `/usr/local/lib/vps-dashboard/domain-availability.mjs`.
+Při ruční aktualizaci je nutné nainstalovat oba soubory. Pozastavení je uložené v
+`/etc/nginx/vps-dashboard-paused/<doména>/paused.conf`; konfigurace Nginx odkazuje na tento adresář.
+Při chybě ověření nebo reloadu se obnoví předchozí konfigurace i stav a operace skončí chybou.
+Stejné operace jsou dostupné přes `vps-dashboard-domains domain-pause <doména>`
+a `vps-dashboard-domains domain-resume <doména>`.
+
+Testy této funkce (Node.js 22.3+):
+`node --experimental-test-module-mocks --test scripts/domain-availability*.test.mjs`.
+Integrační test vyžaduje proměnné `NGINX_BINARY`, `BASH_BINARY` a `OPENSSL_BINARY`
+s cestami k lokálním nástrojům; bez nich se přeskočí. Používá pouze dočasné soubory,
+lokální porty a vlastní proces Nginxu, nikoli konfiguraci produkčního serveru.
+
+## Lokální spuštění
 
 First, run the development server:
 
